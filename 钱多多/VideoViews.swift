@@ -31,6 +31,7 @@ struct VideosPage: View {
     @State private var filter: VideoListFilter = .all
     @State private var searchText = ""
     @State private var showingNewVideo = false
+    @State private var editingLikesGroup: VideoGroup?
     @State private var refreshToken = UUID()
     @AppStorage(demoDataHiddenKey) private var isDemoDataHidden = false
 
@@ -150,6 +151,14 @@ struct VideosPage: View {
                 }
                 .environment(\.managedObjectContext, viewContext)
             }
+            .sheet(item: $editingLikesGroup) { group in
+                if let publishedDate = group.records.compactMap(\.publishedDate).first {
+                    NavigationStack {
+                        VideoLikeDataEditor(videoName: group.title, videoDate: group.date, publishedDate: publishedDate)
+                    }
+                    .environment(\.managedObjectContext, viewContext)
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: .adRecordsDidChange)) { _ in
                 refreshToken = UUID()
             }
@@ -171,7 +180,8 @@ struct VideosPage: View {
 
                     VideoGroupRow(
                         group: group,
-                        latestLikeCount: latestLikeSnapshot(for: group)?.likeCount
+                        latestLikeCount: latestLikeSnapshot(for: group)?.likeCount,
+                        onEditLikes: { editingLikesGroup = group }
                     )
                         .recordCard()
                 }
@@ -666,10 +676,19 @@ struct VideoDetailView: View {
                         isMarkingComment = false
                     }
                 } label: {
-                    Text(isMarkingComment ? "保存中" : "已评论")
-                        .font(.subheadline.weight(.semibold))
+                    HStack(spacing: 6) {
+                        if isMarkingComment {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "checkmark.bubble.fill")
+                        }
+                        Text(isMarkingComment ? "保存中" : "标记已评论")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 32)
+                    .padding(.horizontal, 4)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.borderedProminent)
                 .tint(AppTheme.primary)
                 .disabled(isMarkingComment)
             }
@@ -1571,6 +1590,7 @@ struct RecordRow: View {
 struct VideoGroupRow: View {
     let group: VideoGroup
     let latestLikeCount: Int64?
+    var onEditLikes: () -> Void = {}
     @State private var generatedBrandListDraft: GeneratedBrandListDraft?
 
     var body: some View {
@@ -1618,8 +1638,26 @@ struct VideoGroupRow: View {
                         if group.allArrived {
                             VideoArrivalPill()
                         }
-                        if let latestLikeCount {
-                            VideoLikeCountPill(count: latestLikeCount)
+                        if group.allPublished {
+                            Button(action: onEditLikes) {
+                                Group {
+                                    if let latestLikeCount {
+                                        VideoLikeCountPill(count: latestLikeCount)
+                                    } else {
+                                        Label("记录点赞", systemImage: "heart.badge.plus")
+                                            .font(.caption.weight(.bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 9)
+                                            .frame(height: 28)
+                                            .background(AppTheme.primary.gradient, in: Capsule())
+                                    }
+                                }
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("编辑\(group.title)的点赞量")
+                            .accessibilityHint("打开点赞记录页面，可记录最新数量或修改历史记录")
                         }
                     }
 

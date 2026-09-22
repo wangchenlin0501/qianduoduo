@@ -293,6 +293,13 @@ final class VideoCommentNotificationManager: ObservableObject {
                 record.updatedAt = Date()
             }
             try context.save()
+            // Completion must dismiss the countdown immediately, independently of
+            // notification permission checks and any older reconciliation pass.
+            await CommentReminderLiveActivityManager.shared.endCompletedReminder(id: id)
+            center.removePendingNotificationRequests(withIdentifiers: [Self.prefix + id])
+            center.removeDeliveredNotifications(withIdentifiers: [Self.prefix + id])
+            statuses[id] = "已评论品牌名"
+
             PersistenceController.shared.shareOwnedRecordsIfNeeded(records)
             notifyRecordsChanged()
             await reconcileNow()

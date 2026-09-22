@@ -128,21 +128,16 @@ struct SummaryPage: View {
 
     private var contentPerformanceItems: [ContentPerformanceItem] {
         publishedVideoGroupsForSelectedMonth.compactMap { group in
-            guard let publishedDate = group.records.compactMap(\.publishedDate).first,
-                  let targetDate = qddCalendar.date(
-                    byAdding: .hour,
-                    value: 3,
-                    to: publishedDate
-                  ) else {
+            guard let publishedDate = group.records.compactMap(\.publishedDate).first else {
                 return nil
             }
 
-            let firstSnapshotAfterThreeHours = videoLikeSnapshots
+            let latestSnapshot = videoLikeSnapshots
                 .filter { snapshot in
                     guard snapshot.videoName.nonEmptyOr("未命名视频") == group.title,
                           snapshot.publishedDate == publishedDate,
                           let recordedAt = snapshot.recordedAt,
-                          recordedAt >= targetDate else {
+                          recordedAt >= publishedDate else {
                         return false
                     }
 
@@ -155,15 +150,15 @@ struct SummaryPage: View {
                         return false
                     }
                 }
-                .min { first, second in
-                    (first.recordedAt ?? .distantFuture) < (second.recordedAt ?? .distantFuture)
+                .max { first, second in
+                    (first.recordedAt ?? .distantPast) < (second.recordedAt ?? .distantPast)
                 }
 
             return ContentPerformanceItem(
                 videoName: group.title,
-                likeCount: firstSnapshotAfterThreeHours?.likeCount,
+                likeCount: latestSnapshot?.likeCount,
                 publishedDate: publishedDate,
-                likeRecordedAt: firstSnapshotAfterThreeHours?.recordedAt,
+                likeRecordedAt: latestSnapshot?.recordedAt,
                 nextDayFollowerGain: nextDayFollowerGain(after: publishedDate)
             )
         }
@@ -480,7 +475,7 @@ struct ContentPerformanceCard: View {
             }
 
             Label(
-                "点赞量取发布满3小时后的首条记录；次日涨粉仅在发布当天和次日都有粉丝量记录时计算。",
+                "点赞量取该次发布后的最新记录；次日涨粉仅在发布当天和次日都有粉丝量记录时计算。",
                 systemImage: "info.circle"
             )
             .font(.footnote)

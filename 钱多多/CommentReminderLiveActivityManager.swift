@@ -15,6 +15,7 @@ final class CommentReminderLiveActivityManager {
 
     private(set) var lastError: String?
     private var reconciliationGeneration = 0
+    private var completedReminderIDs: Set<String> = []
 
     private init() {}
 
@@ -28,7 +29,8 @@ final class CommentReminderLiveActivityManager {
         }
 
         lastError = nil
-        let remindersByID = Dictionary(reminders.map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
+        let activeReminders = reminders.filter { !completedReminderIDs.contains($0.id) }
+        let remindersByID = Dictionary(activeReminders.map { ($0.id, $0) }, uniquingKeysWith: { _, newest in newest })
         var existingIDs = Set<String>()
 
         for activity in Activity<CommentReminderAttributes>.activities {
@@ -51,7 +53,7 @@ final class CommentReminderLiveActivityManager {
 
         // Background sync can update/end existing activities. iOS only permits
         // this app to start a new local Live Activity while it is foregrounded.
-        for reminder in reminders.sorted(by: { $0.fireDate < $1.fireDate })
+        for reminder in activeReminders.sorted(by: { $0.fireDate < $1.fireDate })
         where reminder.fireDate > Date() && !existingIDs.contains(reminder.id) {
             do {
                 let attributes = CommentReminderAttributes(videoID: reminder.id)
@@ -61,6 +63,18 @@ final class CommentReminderLiveActivityManager {
             } catch {
                 lastError = "实时活动未能开启：\(error.localizedDescription)"
             }
+        }
+    }
+
+    /// End only this publication. A fresh publication receives a new reminder ID.
+    /// Remember completion so an in-flight reconciliation using an old snapshot
+    /// cannot recreate its activity after this method suspends at `end`.
+    func endCompletedReminder(id: String) async {
+        completedReminderIDs.insert(id)
+        reconciliationGeneration += 1
+        for activity in Activity<CommentReminderAttributes>.activities
+        where activity.attributes.videoID == id {
+            await activity.end(nil, dismissalPolicy: .immediate)
         }
     }
 

@@ -174,6 +174,7 @@ struct LedgerRecordRow: View {
                         .layoutPriority(1)
                     LookChip(lookNumber: record.lookNumber)
                 }
+                PartnershipBadge(type: record.partnershipValue)
                 Label(record.contactWeChat.nonEmptyOr("未填微信"), systemImage: "person.2.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
