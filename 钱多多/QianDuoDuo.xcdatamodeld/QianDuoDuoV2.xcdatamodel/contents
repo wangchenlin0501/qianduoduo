@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="26200" systemVersion="25A354" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="true" userDefinedModelVersionIdentifier="">
+    <entity name="AdRecord" representedClassName="AdRecord" syncable="YES" codeGenerationType="class">
+        <attribute name="adFee" optional="YES" attributeType="Double" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="arrivalDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="brandCommentedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="brandName" optional="YES" attributeType="String"/>
+        <attribute name="clothingName" optional="YES" attributeType="String"/>
+        <attribute name="commentReminderID" optional="YES" attributeType="String"/>
+        <attribute name="contactWeChat" optional="YES" attributeType="String"/>
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="dueDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lookNumber" optional="YES" attributeType="Integer 16" defaultValueString="1" usesScalarValueType="YES"/>
+        <attribute name="paidAmount" optional="YES" attributeType="Double" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="paidDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="paymentAccount" optional="YES" attributeType="String"/>
+        <attribute name="paymentNote" optional="YES" attributeType="String"/>
+        <attribute name="paymentStatus" optional="YES" attributeType="String"/>
+        <attribute name="photoData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
+        <attribute name="platform" optional="YES" attributeType="String"/>
+        <attribute name="poolOrder" optional="YES" attributeType="Double" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="productCode" optional="YES" attributeType="String"/>
+        <attribute name="publishDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="videoOrder" optional="YES" attributeType="Double" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="videoTitle" optional="YES" attributeType="String"/>
+        <relationship name="syncSpace" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="SyncSpace" inverseName="records" inverseEntity="SyncSpace"/>
+    </entity>
+    <entity name="FollowerSnapshot" representedClassName="FollowerSnapshot" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="date" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="followerCount" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="syncSpace" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="SyncSpace" inverseName="followerSnapshots" inverseEntity="SyncSpace"/>
+    </entity>
+    <entity name="VideoLikeSnapshot" representedClassName="VideoLikeSnapshot" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="likeCount" optional="YES" attributeType="Integer 64" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="publishedDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="recordedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="videoDate" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="videoName" optional="YES" attributeType="String"/>
+        <relationship name="syncSpace" optional="YES" maxCount="1" deletionRule="Nullify" destinationEntity="SyncSpace" inverseName="videoLikeSnapshots" inverseEntity="SyncSpace"/>
+    </entity>
+    <entity name="SyncSpace" representedClassName="SyncSpace" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <relationship name="followerSnapshots" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="FollowerSnapshot" inverseName="syncSpace" inverseEntity="FollowerSnapshot"/>
+        <relationship name="records" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="AdRecord" inverseName="syncSpace" inverseEntity="AdRecord"/>
+        <relationship name="videoLikeSnapshots" optional="YES" toMany="YES" deletionRule="Cascade" destinationEntity="VideoLikeSnapshot" inverseName="syncSpace" inverseEntity="VideoLikeSnapshot"/>
+    </entity>
+    <elements>
+        <element name="AdRecord" positionX="-63" positionY="-18" width="128" height="419"/>
+        <element name="FollowerSnapshot" positionX="-63" positionY="430" width="128" height="134"/>
+        <element name="VideoLikeSnapshot" positionX="-63" positionY="590" width="128" height="194"/>
+        <element name="SyncSpace" positionX="155" positionY="-18" width="128" height="134"/>
+    </elements>
+</model>

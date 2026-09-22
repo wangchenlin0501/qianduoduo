@@ -1,0 +1,3 @@
+QDD_DEVELOPMENT_TEAM = YOUR_TEAM_ID
+QDD_BUNDLE_ID = com.yourname.qianduoduo
+QDD_CLOUDKIT_CONTAINER = iCloud.com.yourname.qianduoduo

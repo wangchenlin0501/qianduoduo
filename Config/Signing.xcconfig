@@ -1,0 +1,5 @@
+// Public defaults. Put your actual values in Signing.local.xcconfig.
+QDD_DEVELOPMENT_TEAM =
+QDD_BUNDLE_ID = com.example.qianduoduo
+QDD_CLOUDKIT_CONTAINER = iCloud.$(QDD_BUNDLE_ID)
+#include? "Signing.local.xcconfig"
