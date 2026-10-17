@@ -19,3 +19,6 @@ Config/Signing.local.xcconfig
 *.log
 Exports/
 Backups/
+__pycache__/
+*.py[cod]
+AppStore/Local/

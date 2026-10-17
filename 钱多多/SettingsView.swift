@@ -111,6 +111,36 @@ struct SettingsPage: View {
                         .settingsRow()
                 }
             }
+
+            SettingsCardSection("关于与隐私") {
+                NavigationLink {
+                    PrivacyPolicyView()
+                } label: {
+                    Label("隐私政策", systemImage: "hand.raised.fill")
+                        .settingsRow()
+                }
+
+                if let supportURL = URL(string: "https://github.com/wangchenlin0501/qianduoduo/issues") {
+                    SettingsRowDivider()
+
+                    Link(destination: supportURL) {
+                        Label("帮助与反馈", systemImage: "questionmark.circle")
+                            .settingsRow()
+                    }
+                }
+
+                SettingsRowDivider()
+
+                HStack(spacing: 12) {
+                    Label("版本", systemImage: "info.circle")
+                    Spacer(minLength: 8)
+                    Text(installedVersion)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+                .settingsRow()
+                .accessibilityElement(children: .combine)
+            }
         }
         .navigationTitle("设置")
         .listStyle(.insetGrouped)
@@ -160,6 +190,12 @@ struct SettingsPage: View {
         } message: {
             Text("这不会删除任何记录，只是让汇总、池子、视频和账本暂时显示为空。")
         }
+    }
+
+    private var installedVersion: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
+        return "\(version)（\(build)）"
     }
 
     private func openCloudSharing() {

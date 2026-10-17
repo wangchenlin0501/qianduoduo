@@ -25,6 +25,8 @@
 	</array>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>用于将生成的品牌清单图片保存到相册。</string>
 	<key>NSMicrophoneUsageDescription</key>

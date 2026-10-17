@@ -28,7 +28,7 @@
 - 真机安装需要配置自己的 Apple 开发者签名；CloudKit 共享需要相应的开发者账号与容器能力。
 - 不依赖第三方 Swift Package、后端服务器或 API 密钥。
 
-这里提供的是源码，不是可直接安装的 App Store / TestFlight 版本。
+当前版本处于 App Store 上架准备阶段，尚未在 App Store 发布。这里提供源码，不包含可直接安装的 App Store / TestFlight 版本。
 
 ## 配置与启动
 
@@ -42,7 +42,7 @@
 
 **不要给已经存有重要数据的安装随意更换 Bundle ID 或 CloudKit 容器。** 新身份对应不同的应用与数据空间；本仓库的公开配置不连接作者正在使用的云容器。
 
-设置入口沿用原来的设计：在“汇总”标签已选中时，再连续点该标签 5 次，可进入设置页管理共享、导入导出、提醒和日志。
+设置入口位于“汇总”页右上角齿轮，可管理共享、导入导出、提醒、庆祝音效和主题，并在“关于与隐私”查看版本与隐私政策。
 
 ## 验证
 
@@ -73,7 +73,9 @@ xcrun swiftc 钱多多/MonthlyAmountTrend.swift scripts/verify-monthly-amount.sw
 - 当前代码会清理超过三个月的合作截图，记录字段仍然保留；重要图片请自行备份。
 - 这是从日常使用中整理出的个人项目，功能仍在完善。重要账单请做好备份，软件不能代替专业财务核算。
 
-更详细的检查范围见 [隐私检查说明](PRIVACY_REVIEW.md)。
+用户隐私政策见 [钱多多隐私政策](https://github.com/wangchenlin0501/qianduoduo/blob/main/%E9%92%B1%E5%A4%9A%E5%A4%9A/PrivacyPolicy.txt)，应用设置内也提供离线正文。问题反馈请使用 [GitHub Issues](https://github.com/wangchenlin0501/qianduoduo/issues)，请勿上传私人记录、录音或完整备份。
+
+上架资料与待验收事项见 [上架准备清单](AppStore/上架准备清单.md) 和 [商店资料草稿](AppStore/商店资料.zh-Hans.md)。更详细的源码检查范围见 [隐私检查说明](PRIVACY_REVIEW.md)。
 
 ## 许可证
 
