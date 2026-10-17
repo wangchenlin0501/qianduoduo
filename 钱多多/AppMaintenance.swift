@@ -44,10 +44,6 @@ final class AppLogger: ObservableObject {
         }
     }
 
-    func clearLogs() {
-        logs.removeAll()
-        UserDefaults.standard.removeObject(forKey: logKey)
-    }
 }
 
 // MARK: - Photo Cleanup (3 months)
@@ -132,6 +128,8 @@ struct ExportRecord: Codable {
     let arrivalDate: Date?
     let commentReminderID: String?
     let brandCommentedAt: Date?
+    let clothingName: String?
+    let photoData: Data?
 }
 
 struct ExportFollowerSnapshot: Codable {
@@ -154,6 +152,7 @@ struct ExportVideoLikeSnapshot: Codable {
 }
 
 struct ExportDataBundle: Codable {
+    let formatVersion: Int?
     let records: [ExportRecord]
     let followerSnapshots: [ExportFollowerSnapshot]
     let videoLikeSnapshots: [ExportVideoLikeSnapshot]?
@@ -179,7 +178,7 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
                 platform: record.platform,
                 productCode: record.productCode,
                 adFee: record.adFee,
-                lookNumber: record.lookNumber,
+                lookNumber: record.usesLook ? record.lookNumber : 0,
                 videoTitle: record.videoTitle,
                 paymentStatus: record.paymentStatus,
                 paymentAccount: record.paymentAccount,
@@ -194,7 +193,9 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
                 paidDate: record.paidDate,
                 arrivalDate: record.arrivalDate,
                 commentReminderID: record.commentReminderID,
-                brandCommentedAt: record.brandCommentedAt
+                brandCommentedAt: record.brandCommentedAt,
+                clothingName: record.clothingName,
+                photoData: record.photoData
             )
         }
         let followerSnapshots = try context.fetch(followerRequest).map { snapshot in
@@ -219,12 +220,15 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
             )
         }
         let exportBundle = ExportDataBundle(
+            formatVersion: 2,
             records: exportList,
             followerSnapshots: followerSnapshots,
             videoLikeSnapshots: videoLikeSnapshots
         )
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        // Native Date encoding preserves subsecond timestamps exactly.
+        encoder.dateEncodingStrategy = .deferredToDate
+        encoder.dataEncodingStrategy = .base64
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         AppLogger.shared.log(
             "导出了 \(exportList.count) 条合作记录、\(followerSnapshots.count) 条粉丝记录和 \(videoLikeSnapshots.count) 条点赞记录"
@@ -236,38 +240,116 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
     }
 }
 
-func importRecords(data: Data, context: NSManagedObjectContext) -> Int {
+struct RecordImportSummary {
+    let importedCount: Int
+    let skippedCount: Int
+
+    var message: String {
+        if importedCount == 0 {
+            return skippedCount > 0
+                ? "这份备份中的记录均已存在，已跳过 \(skippedCount) 条重复记录。"
+                : "备份中没有可导入的记录。"
+        }
+        if skippedCount > 0 {
+            return "成功导入 \(importedCount) 条记录，跳过 \(skippedCount) 条重复记录。"
+        }
+        return "成功导入 \(importedCount) 条记录。"
+    }
+}
+
+private enum BackupImportError: LocalizedError {
+    case invalidRecordID
+    case unsupportedFormat
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidRecordID:
+            "备份中有无效的记录标识，未导入任何数据。"
+        case .unsupportedFormat:
+            "这份备份来自更新版本，请先更新 App 后再导入。"
+        }
+    }
+}
+
+private struct BackupFormatHeader: Decodable {
+    let formatVersion: Int?
+}
+
+private func backupRecordID(_ value: String) throws -> UUID {
+    guard let id = UUID(uuidString: value) else {
+        throw BackupImportError.invalidRecordID
+    }
+    return id
+}
+
+func importRecords(
+    data: Data,
+    context: NSManagedObjectContext,
+    persistence: PersistenceController = .shared
+) throws -> RecordImportSummary {
     let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
+    decoder.dataDecodingStrategy = .base64
 
     do {
+        let version = (try? decoder.decode(BackupFormatHeader.self, from: data))?.formatVersion ?? 1
+        switch version {
+        case 1:
+            decoder.dateDecodingStrategy = .iso8601
+        case 2:
+            decoder.dateDecodingStrategy = .deferredToDate
+        default:
+            throw BackupImportError.unsupportedFormat
+        }
         let importBundle: ExportDataBundle
         if let bundle = try? decoder.decode(ExportDataBundle.self, from: data) {
             importBundle = bundle
         } else {
             let legacyRecords = try decoder.decode([ExportRecord].self, from: data)
-            importBundle = ExportDataBundle(records: legacyRecords, followerSnapshots: [], videoLikeSnapshots: nil)
+            importBundle = ExportDataBundle(formatVersion: nil, records: legacyRecords, followerSnapshots: [], videoLikeSnapshots: nil)
         }
-        let syncSpace = try? PersistenceController.shared.activeSyncSpace(in: context)
+        // Validate IDs before inserting anything; random replacements would defeat deduplication.
+        let recordIDs = try importBundle.records.map { try backupRecordID($0.id) }
+        let followerIDs = try importBundle.followerSnapshots.map { try backupRecordID($0.id) }
+        let likeItems = importBundle.videoLikeSnapshots ?? []
+        let likeIDs = try likeItems.map { try backupRecordID($0.id) }
+
+        var existingRecordIDs = Set(try context.fetch(AdRecord.fetchRequest()).compactMap(\.id))
+        var existingFollowerIDs = Set(try context.fetch(FollowerSnapshot.fetchRequest()).compactMap(\.id))
+        var existingLikeIDs = Set(try context.fetch(VideoLikeSnapshot.fetchRequest()).compactMap(\.id))
+
+        let hasNewRecords = recordIDs.contains { !existingRecordIDs.contains($0) }
+            || followerIDs.contains { !existingFollowerIDs.contains($0) }
+            || likeIDs.contains { !existingLikeIDs.contains($0) }
+        guard hasNewRecords else {
+            return RecordImportSummary(
+                importedCount: 0,
+                skippedCount: recordIDs.count + followerIDs.count + likeIDs.count
+            )
+        }
+
+        let syncSpace = try persistence.activeSyncSpace(in: context)
         var imported = 0
+        var skipped = 0
         var importedRecords: [AdRecord] = []
         var importedFollowerSnapshots: [FollowerSnapshot] = []
         var importedVideoLikeSnapshots: [VideoLikeSnapshot] = []
-        for item in importBundle.records {
-            let record = AdRecord(context: context)
-            if let syncSpace {
-                if let store = syncSpace.objectID.persistentStore {
-                    context.assign(record, to: store)
-                }
-                record.syncSpace = syncSpace
+        for (item, id) in zip(importBundle.records, recordIDs) {
+            guard existingRecordIDs.insert(id).inserted else {
+                skipped += 1
+                continue
             }
-            record.id = UUID(uuidString: item.id) ?? UUID()
+            let record = AdRecord(context: context)
+            if let store = syncSpace.objectID.persistentStore {
+                context.assign(record, to: store)
+            }
+            record.syncSpace = syncSpace
+            record.id = id
             record.brandName = item.brandName
             record.contactWeChat = item.contactWeChat
             record.platform = item.platform
             record.productCode = item.productCode
             record.adFee = item.adFee
-            record.lookNumber = item.lookNumber
+            record.lookNumber = record.usesLook ? item.lookNumber : 0
             record.videoTitle = item.videoTitle
             record.paymentStatus = item.paymentStatus
             record.paymentAccount = item.paymentAccount
@@ -283,19 +365,23 @@ func importRecords(data: Data, context: NSManagedObjectContext) -> Int {
             record.arrivalDate = item.arrivalDate
             record.commentReminderID = item.commentReminderID
             record.brandCommentedAt = item.brandCommentedAt
+            record.clothingName = item.clothingName
+            record.photoData = item.photoData
             importedRecords.append(record)
             imported += 1
         }
 
-        for item in importBundle.followerSnapshots {
-            let snapshot = FollowerSnapshot(context: context)
-            if let syncSpace {
-                if let store = syncSpace.objectID.persistentStore {
-                    context.assign(snapshot, to: store)
-                }
-                snapshot.syncSpace = syncSpace
+        for (item, id) in zip(importBundle.followerSnapshots, followerIDs) {
+            guard existingFollowerIDs.insert(id).inserted else {
+                skipped += 1
+                continue
             }
-            snapshot.id = UUID(uuidString: item.id) ?? UUID()
+            let snapshot = FollowerSnapshot(context: context)
+            if let store = syncSpace.objectID.persistentStore {
+                context.assign(snapshot, to: store)
+            }
+            snapshot.syncSpace = syncSpace
+            snapshot.id = id
             snapshot.date = item.date
             snapshot.followerCount = max(item.followerCount, 0)
             snapshot.createdAt = item.createdAt ?? Date()
@@ -304,15 +390,17 @@ func importRecords(data: Data, context: NSManagedObjectContext) -> Int {
             imported += 1
         }
 
-        for item in importBundle.videoLikeSnapshots ?? [] {
-            let snapshot = VideoLikeSnapshot(context: context)
-            if let syncSpace {
-                if let store = syncSpace.objectID.persistentStore {
-                    context.assign(snapshot, to: store)
-                }
-                snapshot.syncSpace = syncSpace
+        for (item, id) in zip(likeItems, likeIDs) {
+            guard existingLikeIDs.insert(id).inserted else {
+                skipped += 1
+                continue
             }
-            snapshot.id = UUID(uuidString: item.id) ?? UUID()
+            let snapshot = VideoLikeSnapshot(context: context)
+            if let store = syncSpace.objectID.persistentStore {
+                context.assign(snapshot, to: store)
+            }
+            snapshot.syncSpace = syncSpace
+            snapshot.id = id
             snapshot.videoName = item.videoName
             snapshot.videoDate = item.videoDate
             snapshot.publishedDate = item.publishedDate
@@ -325,17 +413,17 @@ func importRecords(data: Data, context: NSManagedObjectContext) -> Int {
         }
         try context.save()
         context.processPendingChanges()
-        PersistenceController.shared.shareOwnedRecordsIfNeeded(importedRecords)
-        PersistenceController.shared.shareOwnedFollowerSnapshotsIfNeeded(importedFollowerSnapshots)
-        PersistenceController.shared.shareOwnedVideoLikeSnapshotsIfNeeded(importedVideoLikeSnapshots)
+        persistence.shareOwnedRecordsIfNeeded(importedRecords)
+        persistence.shareOwnedFollowerSnapshotsIfNeeded(importedFollowerSnapshots)
+        persistence.shareOwnedVideoLikeSnapshotsIfNeeded(importedVideoLikeSnapshots)
         notifyRecordsChanged()
         AppLogger.shared.log(
-            "导入了 \(importedRecords.count) 条合作记录、\(importedFollowerSnapshots.count) 条粉丝记录和 \(importedVideoLikeSnapshots.count) 条点赞记录"
+            "导入了 \(importedRecords.count) 条合作记录、\(importedFollowerSnapshots.count) 条粉丝记录和 \(importedVideoLikeSnapshots.count) 条点赞记录，跳过 \(skipped) 条重复记录"
         )
-        return imported
+        return RecordImportSummary(importedCount: imported, skippedCount: skipped)
     } catch {
         AppLogger.shared.log("导入失败: \(error.localizedDescription)")
         context.rollback()
-        return 0
+        throw error
     }
 }

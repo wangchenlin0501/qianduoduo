@@ -21,24 +21,33 @@ struct CommentReminderSettingsSection: View {
     }
 
     var body: some View {
-        Section {
-            HStack {
+        SettingsCardSection(
+            "评论提醒",
+            footer: "各设备需单独开启通知，声音和倒计时仅影响本机。离线或同步延迟可能影响提醒。"
+        ) {
+            HStack(spacing: 12) {
                 Label("本机通知", systemImage: "bell.badge")
-                Spacer()
+                Spacer(minLength: 8)
                 Text(reminders.authorizationText)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
             }
+            .settingsRow()
 
-            HStack {
+            SettingsRowDivider()
+
+            HStack(spacing: 12) {
                 Label("待提醒", systemImage: "clock")
-                Spacer()
+                Spacer(minLength: 8)
                 Text("\(reminders.pendingCount) 条")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
+            .settingsRow()
 
             if authorizationStatus == .notDetermined {
+                SettingsRowDivider()
+
                 Button {
                     isEnablingNotifications = true
                     Task {
@@ -51,17 +60,28 @@ struct CommentReminderSettingsSection: View {
                         isEnablingNotifications ? "正在开启通知" : "允许本机通知",
                         systemImage: "bell.and.waves.left.and.right"
                     )
+                    .settingsRow()
                 }
                 .disabled(isEnablingNotifications)
             }
 
-            Picker(selection: $soundValue) {
-                ForEach(CommentReminderSound.allCases) { sound in
-                    Text(sound.title).tag(sound.rawValue)
-                }
-            } label: {
+            SettingsRowDivider()
+
+            HStack(spacing: 12) {
                 Label("提示音", systemImage: "speaker.wave.2")
+                Spacer(minLength: 8)
+                Picker("提示音", selection: $soundValue) {
+                    ForEach(CommentReminderSound.allCases) { sound in
+                        Text(sound.title).tag(sound.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(.secondary)
             }
+            .settingsRow()
+
+            SettingsRowDivider()
 
             Button {
                 if selectedSound == .system {
@@ -71,13 +91,19 @@ struct CommentReminderSettingsSection: View {
                 }
             } label: {
                 Label("试听提示音", systemImage: "play.circle")
+                    .settingsRow()
             }
             .disabled(isTestingNotification)
+
+            SettingsRowDivider()
 
             Toggle(isOn: $liveActivitiesEnabled) {
                 Label("灵动岛与锁屏倒计时", systemImage: "timer")
             }
-            .tint(AppTheme.primary)
+            .tint(AppTheme.readablePrimary)
+            .settingsRow()
+
+            SettingsRowDivider()
 
             Button {
                 testNotification()
@@ -86,28 +112,25 @@ struct CommentReminderSettingsSection: View {
                     isTestingNotification ? "正在准备测试通知" : "测试本机通知",
                     systemImage: "bell.badge.fill"
                 )
+                .settingsRow()
             }
             .disabled(isTestingNotification)
+
+            SettingsRowDivider()
 
             Button {
                 openNotificationSettings()
             } label: {
                 Label("系统通知设置", systemImage: "arrow.up.forward.app")
+                    .settingsRow()
             }
 
             if let error = reminders.lastError, !error.isEmpty {
+                SettingsRowDivider()
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.orange)
-            }
-        } header: {
-            Text("评论提醒")
-        } footer: {
-            VStack(alignment: .leading, spacing: 6) {
-                if !reminders.diagnosticText.isEmpty {
-                    Text(reminders.diagnosticText)
-                }
-                Text("共享同一份 iCloud 数据的设备会各自安排提醒，请在每台设备允许通知。离线或未及时同步时，提醒可能延后。声音和倒计时开关仅影响本机。")
+                    .settingsRow()
             }
         }
         .task {

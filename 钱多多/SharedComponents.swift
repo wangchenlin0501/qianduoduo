@@ -7,12 +7,29 @@ import SwiftUI
 import UIKit
 
 enum AppTheme {
-    // #8B5E3C · RGB(139, 94, 60)
-    static let primary = Color(
-        red: 139.0 / 255.0,
-        green: 94.0 / 255.0,
-        blue: 60.0 / 255.0
-    )
+    static var primary: Color { AppThemeSettings.shared.color.swiftUIColor }
+    static var primaryUIColor: UIColor { AppThemeSettings.shared.color.uiColor }
+    static var onPrimary: Color { AppThemeSettings.shared.color.foregroundColor }
+    static var onPrimaryUIColor: UIColor { AppThemeSettings.shared.color.prefersWhiteForeground ? .white : .black }
+
+    static var readablePrimary: Color { Color(uiColor: readablePrimaryUIColor) }
+    static var readablePrimaryUIColor: UIColor {
+        let color = AppThemeSettings.shared.color
+        return UIColor { traits in color.readableTint(onDarkBackground: traits.userInterfaceStyle == .dark).uiColor }
+    }
+
+    static func foreground(on color: Color) -> Color {
+        AppThemeColor(uiColor: UIColor(color))?.foregroundColor ?? .white
+    }
+
+    static func readable(_ color: Color) -> Color {
+        let source = UIColor(color)
+        return Color(uiColor: UIColor { traits in
+            let resolved = source.resolvedColor(with: traits)
+            return AppThemeColor(uiColor: resolved)?
+                .readableTint(onDarkBackground: traits.userInterfaceStyle == .dark).uiColor ?? resolved
+        })
+    }
 
     // 合作方式采用统一的中等饱和度，保持辨识度但不压过主题色。
     static let consignment = Color(
@@ -30,20 +47,25 @@ enum AppTheme {
         green: 108.0 / 255.0,
         blue: 203.0 / 255.0
     )
-
-    static let primaryUIColor = UIColor(
-        red: 139.0 / 255.0,
-        green: 94.0 / 255.0,
-        blue: 60.0 / 255.0,
-        alpha: 1
-    )
 }
 
 enum AppLayout {
     static let listHorizontalInset: CGFloat = 4
     static let editorHorizontalInset: CGFloat = 16
-    static let cardCornerRadius: CGFloat = 16
+    static let cardCornerRadius: CGFloat = 20
+    static let insetCornerRadius: CGFloat = 16
+    static let controlCornerRadius: CGFloat = 14
+    static let compactControlCornerRadius: CGFloat = 12
+    static let thumbnailCornerRadius: CGFloat = 10
     static let cardContentPadding: CGFloat = 14
+    // Keep the light shadow inside the space around list cards.
+    static let lightCardShadowRadius: CGFloat = 3
+    static let lightCardShadowOffset: CGFloat = 1
+    static let lightCardShadowOpacity = 0.045
+
+    static var cardShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: cardCornerRadius, style: .continuous)
+    }
 
     static func listRowInsets(top: CGFloat = 8, bottom: CGFloat = 8) -> EdgeInsets {
         EdgeInsets(top: top, leading: listHorizontalInset, bottom: bottom, trailing: listHorizontalInset)
@@ -92,34 +114,34 @@ struct CardSurfaceBackground: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        RoundedRectangle(cornerRadius: AppLayout.cardCornerRadius, style: .continuous)
+        let shape = AppLayout.cardShape
+        shape
             .fill(cardFill)
             .shadow(
                 color: cardShadow,
-                radius: colorScheme == .dark ? 10 : 8,
+                radius: colorScheme == .dark ? 10 : AppLayout.lightCardShadowRadius,
                 x: 0,
-                y: colorScheme == .dark ? 5 : 3
+                y: colorScheme == .dark ? 5 : AppLayout.lightCardShadowOffset
             )
             .overlay {
-                RoundedRectangle(cornerRadius: AppLayout.cardCornerRadius, style: .continuous)
-                    .stroke(cardStroke, lineWidth: 1)
+                shape.strokeBorder(cardStroke, lineWidth: 1)
             }
     }
 
     private var cardFill: Color {
         colorScheme == .dark
             ? Color(uiColor: .secondarySystemBackground).opacity(0.88)
-            : Color(uiColor: .systemBackground).opacity(0.98)
+            : Color(uiColor: .systemBackground)
     }
 
     private var cardStroke: Color {
-        AppTheme.primary.opacity(colorScheme == .dark ? 0.2 : 0.08)
+        AppTheme.readablePrimary.opacity(colorScheme == .dark ? 0.2 : 0.08)
     }
 
     private var cardShadow: Color {
         colorScheme == .dark
             ? Color.black.opacity(0.42)
-            : Color.black.opacity(0.07)
+            : Color.black.opacity(AppLayout.lightCardShadowOpacity)
     }
 }
 
@@ -131,7 +153,7 @@ struct AppCardTitle: View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
                 .frame(width: 20)
             Text(title)
                 .font(.headline)
@@ -187,7 +209,7 @@ struct PaymentProgressSummary: View {
                 Spacer()
                 Text("\(Int(progress * 100))%")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(progress >= 1 ? completeTint : AppTheme.primary)
+                    .foregroundStyle(progress >= 1 ? completeTint : AppTheme.readablePrimary)
             }
 
             GeometryReader { proxy in
@@ -195,7 +217,7 @@ struct PaymentProgressSummary: View {
                     Capsule()
                         .fill(Color.secondary.opacity(0.12))
                     Capsule()
-                        .fill((progress >= 1 ? completeTint : AppTheme.primary).gradient)
+                        .fill((progress >= 1 ? completeTint : AppTheme.readablePrimary).gradient)
                         .frame(width: proxy.size.width * CGFloat(progress))
                 }
             }
@@ -214,10 +236,10 @@ struct DateSquare: View {
             if let date {
                 Text(chineseDayText(date))
                     .font(.title2.weight(.bold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.foreground(on: tint))
                 Text(chineseMonthText(date))
                     .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white.opacity(0.85))
+                    .foregroundStyle(AppTheme.foreground(on: tint).opacity(0.85))
             }
         }
         .frame(width: 54, height: 54)
@@ -227,7 +249,7 @@ struct DateSquare: View {
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             ),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+            in: RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
         )
         .shadow(color: tint.opacity(0.2), radius: 4, x: 0, y: 2)
     }
@@ -241,7 +263,7 @@ struct LookChip: View {
     var body: some View {
         Text(lookNumber > 0 ? "LOOK \(lookNumber)" : "随机")
             .font(.caption2.weight(.bold))
-            .foregroundStyle(isLookOne ? AppTheme.primary : .secondary)
+            .foregroundStyle(isLookOne ? AppTheme.readablePrimary : .secondary)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10)
@@ -254,7 +276,7 @@ struct ScheduledBadge: View {
     var body: some View {
         Text("已排期")
             .font(.caption2.weight(.bold))
-            .foregroundStyle(AppTheme.primary)
+            .foregroundStyle(AppTheme.readablePrimary)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10)
@@ -272,7 +294,7 @@ struct CategoryBadge: View {
             Text(category.rawValue)
         }
             .font(.caption.weight(.bold))
-            .foregroundStyle(category.tint)
+            .foregroundStyle(AppTheme.readable(category.tint))
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 10)
@@ -315,6 +337,40 @@ struct RemarkChip: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(Color.orange.opacity(0.12), in: Capsule())
+        }
+    }
+}
+
+// Shared by the dashboard and pool so their layout and expansion stay identical.
+struct ExpandableSummaryCard<Overview: View, Details: View>: View {
+    @Binding var isExpanded: Bool
+    var hasDetails = true
+    @ViewBuilder var overview: Overview
+    @ViewBuilder var details: Details
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            VStack(alignment: .leading, spacing: 14) {
+                overview
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+                    .transaction { transaction in
+                        transaction.animation = nil
+                    }
+
+                if isExpanded && hasDetails {
+                    Divider()
+
+                    details
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.vertical, 4)
+            .recordCard()
+
+            CardExpansionButton(isExpanded: $isExpanded)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }

@@ -29,12 +29,6 @@ enum CommentReminderSound: String, CaseIterable, Identifiable {
         return UNNotificationSound(named: UNNotificationSoundName(rawValue: url.lastPathComponent))
     }
 
-    static func ensureSoundsAvailable() {
-        for sound in allCases where sound != .system {
-            _ = sound.preparedFileURL()
-        }
-    }
-
     func preview() {
         if self == .system {
             // iOS 没有直接播放用户默认通知音的公开 API，通过本机通知试听原音。

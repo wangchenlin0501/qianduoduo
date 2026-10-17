@@ -10,6 +10,7 @@ import SwiftUI
 import UIKit
 
 struct PoolRecordEditor: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -29,7 +30,7 @@ struct PoolRecordEditor: View {
     @State private var category: AdCategory
     @State private var partnership: PartnershipType
     @State private var isLookRandom: Bool
-    @State private var lookNumber: Int
+    @State private var lookNumberText: String
     @State private var adFee: Double
     @State private var hasArrived: Bool
     @State private var arrivalDate: Date
@@ -47,7 +48,7 @@ struct PoolRecordEditor: View {
         _category = State(initialValue: record?.categoryValue ?? .clothing)
         _partnership = State(initialValue: record?.partnershipValue ?? .consignment)
         _isLookRandom = State(initialValue: record == nil || (record?.lookNumber ?? 0) <= 0)
-        _lookNumber = State(initialValue: max(Int(record?.lookNumber ?? 1), 1))
+        _lookNumberText = State(initialValue: record.map { String(max(Int($0.lookNumber), 1)) } ?? "")
         _adFee = State(initialValue: record?.adFee ?? 0)
         _hasArrived = State(initialValue: record?.arrivalDate != nil)
         _arrivalDate = State(initialValue: record?.arrivalDate ?? Date())
@@ -99,127 +100,174 @@ struct PoolRecordEditor: View {
         return scheduleTargets.first { $0.id == selectedScheduleID }
     }
 
+    private var pageBackground: Color {
+        colorScheme == .dark ? .black : Color(uiColor: .systemGroupedBackground)
+    }
+
+    private var groupBackground: Color {
+        // Settings uses the base dark surface; a sheet's elevated surface is lighter.
+        colorScheme == .dark ? Color(red: 28 / 255, green: 28 / 255, blue: 30 / 255) : Color(uiColor: .secondarySystemGroupedBackground)
+    }
+
+    private var validLookNumber: Int? {
+        guard let number = Int(lookNumberText), (1...50).contains(number) else { return nil }
+        return number
+    }
+
+    private var isLookValid: Bool {
+        !partnership.usesLook || isLookRandom || validLookNumber != nil
+    }
+
     var body: some View {
-        EditorFormContainer {
-            EditorCardSection("衣服截图", symbol: "photo.fill") {
-                EditorCardRow(showsDivider: false) {
-                    PhotoPickerRow(photoData: $photoData, photoPickerItem: $photoPickerItem)
-                }
+        Form {
+            Section("衣服截图") {
+                PhotoPickerRow(photoData: $photoData, photoPickerItem: $photoPickerItem)
             }
+            .listRowBackground(groupBackground)
 
-            EditorCardSection("待拍摄广告", symbol: "square.and.pencil") {
-                EditorCardRow {
-                    TextField("品牌", text: $brandName)
-                        .textInputAutocapitalization(.never)
-                }
-                EditorCardRow {
-                    TextField("对接人微信", text: $contactWeChat)
-                        .textInputAutocapitalization(.never)
-                }
-                EditorCardRow {
-                    Picker("品类", selection: $category) {
-                        ForEach(AdCategory.allCases) { category in
-                            Text(category.rawValue).tag(category)
+            Section("待拍摄广告") {
+                // One Form row owns the entire surface, avoiding seams between
+                // individually rendered row backgrounds at fractional pixel positions.
+                VStack(spacing: 0) {
+                    PoolEditorFieldRow("品牌") {
+                        TextField("请输入", text: $brandName)
+                            .textInputAutocapitalization(.never)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel("品牌")
+                            .submitLabel(.done)
+                    }
+                    PoolEditorFieldRow("对接人微信") {
+                        TextField("请输入", text: $contactWeChat)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel("对接人微信")
+                            .submitLabel(.done)
+                    }
+                    PoolEditorFieldRow("品类") {
+                        Picker("品类", selection: $category) {
+                            ForEach(AdCategory.allCases) { category in
+                                Text(category.rawValue).tag(category)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    PoolEditorFieldRow("合作方式") {
+                        Picker("合作方式", selection: $partnership) {
+                            ForEach(PartnershipType.allCases) { type in
+                                Text(type.rawValue).tag(type)
+                            }
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    if partnership.usesLook {
+                        PoolEditorFieldRow("Look") {
+                            Picker("Look", selection: $isLookRandom) {
+                                Text("随机").tag(true)
+                                Text("指定").tag(false)
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
                         }
                     }
-                    .pickerStyle(.menu)
-                }
-                EditorCardRow {
-                    Picker("合作方式", selection: $partnership) {
-                        ForEach(PartnershipType.allCases) { type in
-                            Label(type.rawValue, systemImage: type.symbolName)
-                                .foregroundStyle(type.tint)
-                                .tag(type)
+                    if partnership.usesLook && !isLookRandom {
+                        PoolEditorFieldRow("Look 编号") {
+                            TextField("输入 1–50", text: $lookNumberText)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .accessibilityLabel("Look 编号，1 至 50")
+                                .onChange(of: lookNumberText) { _, value in
+                                    lookNumberText = String(value.filter { $0.isASCII && $0.isNumber })
+                                }
+                        }
+                        if !lookNumberText.isEmpty && validLookNumber == nil {
+                            Text("Look 编号请输入 1–50")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
                         }
                     }
-                    .pickerStyle(.segmented)
-                    .tint(partnership.tint)
-                }
-                EditorCardRow {
-                    Picker("Look", selection: $isLookRandom) {
-                        Text("随机").tag(true)
-                        Text("指定").tag(false)
-                    }
-                    .pickerStyle(.segmented)
-                }
-                if !isLookRandom {
-                    EditorCardRow {
-                        Stepper(value: $lookNumber, in: 1...50) {
-                            Text("Look \(lookNumber)")
-                        }
-                    }
-                }
-                EditorCardRow(showsDivider: false) {
-                    AmountField(amount: $adFee, title: partnership == .exchange ? "置换无需报价" : "报价", placeholder: "报价")
-                        .disabled(partnership == .exchange)
-                }
-            }
-
-            EditorCardSection("备注", symbol: "note.text") {
-                EditorCardRow(showsDivider: false) {
-                    TextField("备注", text: $paymentNote, axis: .vertical)
-                        .lineLimit(3...5)
-                }
-            }
-
-            EditorCardSection("状态", symbol: "checkmark.circle.fill") {
-                EditorCardRow(showsDivider: false) {
-                    StatusButton(
-                        inactiveTitle: "未到货",
-                        activeTitle: "已到货",
-                        isSelected: hasArrived,
-                        date: arrivalDate,
-                        dateLabel: "到货日期",
-                        hint: "到货后点一下记录今天",
-                        symbolName: "shippingbox.fill",
-                        tint: AppTheme.primary
-                    ) {
-                        hasArrived.toggle()
-                        if hasArrived {
-                            arrivalDate = dayOnly(Date())
+                    PoolEditorFieldRow("报价", symbol: "yensign.circle.fill", showsSeparator: false) {
+                        if partnership == .exchange {
+                            Text("置换无需报价")
+                        } else {
+                            AmountField(amount: $adFee, title: "报价", placeholder: "请输入金额", showsCurrencyIcon: false, textAlignment: .trailing, inputFont: .title3.weight(.medium))
                         }
                     }
                 }
+                .padding(.horizontal, 16)
+                .buttonStyle(.borderless)
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
             }
+            .listRowBackground(groupBackground)
 
-            EditorCardSection("池子月份", symbol: "calendar", showsTitle: false) {
-                EditorCardRow(showsDivider: false) {
-                    PoolMonthSelectorRow(selectedMonth: $selectedPoolMonth)
-                }
+            Section("备注") {
+                TextField("备注", text: $paymentNote, axis: .vertical)
+                    .lineLimit(3...5)
             }
+            .listRowBackground(groupBackground)
 
-            EditorCardSection("排期", symbol: "calendar.badge.clock") {
-                EditorCardRow(showsDivider: scheduleTargets.isEmpty || selectedScheduleTarget != nil) {
-                    Picker("排期到视频", selection: $selectedScheduleID) {
-                        Text("不排期").tag(Optional<String>.none)
-                        ForEach(scheduleTargets) { target in
-                            Text(target.menuTitle).tag(Optional(target.id))
-                        }
+            Section("状态") {
+                StatusButton(
+                    inactiveTitle: "未到货",
+                    activeTitle: "已到货",
+                    isSelected: hasArrived,
+                    date: arrivalDate,
+                    dateLabel: "到货日期",
+                    hint: "到货后点一下记录今天",
+                    symbolName: "shippingbox.fill",
+                    tint: AppTheme.primary
+                ) {
+                    hasArrived.toggle()
+                    if hasArrived {
+                        arrivalDate = dayOnly(Date())
                     }
-                    .pickerStyle(.menu)
                 }
+            }
+            .listRowBackground(groupBackground)
+
+            Section("池子月份") {
+                PoolMonthSelectorRow(selectedMonth: $selectedPoolMonth)
+            }
+            .listRowBackground(groupBackground)
+
+            Section("排期") {
+                Picker("排期到视频", selection: $selectedScheduleID) {
+                    Text("不排期").tag(Optional<String>.none)
+                    ForEach(scheduleTargets) { target in
+                        Text(target.menuTitle).tag(Optional(target.id))
+                    }
+                }
+                .pickerStyle(.menu)
 
                 if let selectedScheduleTarget {
-                    EditorCardRow(showsDivider: false) {
-                        HStack {
-                            Label(selectedScheduleTarget.title, systemImage: "calendar")
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            Spacer()
-                            Text(selectedScheduleTarget.date.map { shortDateText($0) } ?? "待定")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                } else if scheduleTargets.isEmpty {
-                    EditorCardRow(showsDivider: false) {
-                        Label("暂无可排期的视频", systemImage: "calendar.badge.exclamationmark")
+                    HStack {
+                        Label(selectedScheduleTarget.title, systemImage: "calendar")
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                        Spacer()
+                        Text(selectedScheduleTarget.date.map { shortDateText($0) } ?? "待定")
                             .foregroundStyle(.secondary)
                     }
+                } else if scheduleTargets.isEmpty {
+                    Label("暂无可排期的视频", systemImage: "calendar.badge.exclamationmark")
+                        .foregroundStyle(.secondary)
                 }
             }
+            .listRowBackground(groupBackground)
         }
         .navigationTitle(record == nil ? "新增池子记录" : "编辑池子记录")
-        .softPageBackground()
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
+        .background(pageBackground.ignoresSafeArea())
+        .presentationBackground(pageBackground)
+        .toolbarBackground(pageBackground, for: .navigationBar)
+        .scrollDismissesKeyboard(.interactively)
+        .onSubmit {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
         .onChange(of: partnership) { _, newValue in
             if !newValue.needsPayment {
                 adFee = 0
@@ -242,11 +290,13 @@ struct PoolRecordEditor: View {
                 Button("保存") {
                     save()
                 }
+                .disabled(!isLookValid)
             }
         }
     }
 
     private func save() {
+        guard isLookValid else { return }
         let target = record ?? AdRecord(context: viewContext)
         if record == nil || target.syncSpace == nil {
             PersistenceController.shared.prepareNewRecord(target, in: viewContext)
@@ -264,11 +314,17 @@ struct PoolRecordEditor: View {
         target.contactWeChat = cleaned(contactWeChat)
         target.categoryValue = category
         target.partnershipValue = partnership
-        target.lookNumber = isLookRandom ? 0 : Int16(clamping: lookNumber)
+        target.lookNumber = partnership.usesLook && !isLookRandom ? Int16(validLookNumber ?? 1) : 0
         target.adFee = partnership.needsPayment ? max(adFee, 0) : 0
         target.arrivalDate = hasArrived ? dayOnly(arrivalDate) : nil
         target.paymentNote = cleaned(paymentNote)
         target.photoData = photoData
+        let publication = selectedScheduleTarget.flatMap { schedule in
+            existingVideoPublication(
+                name: schedule.name, date: schedule.date,
+                in: Array(allRecords), excluding: target.objectID
+            )
+        }
         if let selectedScheduleTarget {
             target.videoTitle = selectedScheduleTarget.name
             target.publishDate = selectedScheduleTarget.date.map(dayOnly)
@@ -278,9 +334,9 @@ struct PoolRecordEditor: View {
             target.publishDate = nil
             target.videoOrder = 0
         }
-        target.publishedDate = nil
-        target.commentReminderID = nil
-        target.brandCommentedAt = nil
+        target.publishedDate = publication?.publishedAt
+        target.commentReminderID = publication?.id
+        target.brandCommentedAt = publication?.completedAt
         target.paidDate = nil
         target.paymentAccount = nil
         target.paidAmount = 0
@@ -412,9 +468,11 @@ struct AdRecordEditor: View {
                     .pickerStyle(.segmented)
                     .tint(partnership.tint)
                 }
-                EditorCardRow {
-                    Stepper(value: $lookNumber, in: 1...50) {
-                        Text("Look \(lookNumber)")
+                if partnership.usesLook {
+                    EditorCardRow {
+                        Stepper(value: $lookNumber, in: 1...50) {
+                            Text("Look \(lookNumber)")
+                        }
                     }
                 }
                 EditorCardRow(showsDivider: false) {
@@ -481,7 +539,7 @@ struct AdRecordEditor: View {
         target.contactWeChat = cleaned(contactWeChat)
         target.categoryValue = category
         target.partnershipValue = partnership
-        target.lookNumber = Int16(clamping: lookNumber)
+        target.lookNumber = partnership.usesLook ? Int16(clamping: lookNumber) : 0
         target.adFee = partnership.needsPayment ? normalizedAdFee : 0
         target.arrivalDate = hasArrived ? dayOnly(arrivalDate) : nil
         target.photoData = photoData
@@ -531,6 +589,44 @@ struct EditorFormContainer<Content: View>: View {
             .padding(.horizontal, AppLayout.editorHorizontalInset)
             .padding(.top, 18)
             .padding(.bottom, 110)
+        }
+    }
+}
+
+private struct PoolEditorFieldRow<Content: View>: View {
+    let title: String
+    let symbol: String?
+    let showsSeparator: Bool
+    @ViewBuilder var content: Content
+
+    init(_ title: String, symbol: String? = nil, showsSeparator: Bool = true, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.symbol = symbol
+        self.showsSeparator = showsSeparator
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 20) {
+            HStack(spacing: 10) {
+                if let symbol {
+                    Image(systemName: symbol)
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(AppTheme.readablePrimary)
+                }
+                Text(title)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            content
+                .foregroundStyle(.secondary)
+                .tint(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .padding(.vertical, 12)
+        .frame(minHeight: symbol == nil ? 52 : 64)
+        .overlay(alignment: .bottom) {
+            if showsSeparator { Rectangle().fill(Color(uiColor: .separator)).frame(height: 0.5) }
         }
     }
 }
@@ -625,6 +721,14 @@ struct PhotoPickerRow: View {
                 if photoData != nil {
                     Spacer()
 
+                    Button {
+                        beginCroppingCurrentPhoto()
+                    } label: {
+                        Label("裁切", systemImage: "crop")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.borderless)
+
                     Button(role: .destructive) {
                         photoData = nil
                         photoPickerItem = nil
@@ -662,7 +766,7 @@ struct PhotoPickerRow: View {
             guard let newItem else { return }
             let sessionID = UUID()
             cropLoadTask?.cancel()
-            cropSessionID = sessionID
+            cropSessionID = nil
             cropImage = nil
 
             cropLoadTask = Task {
@@ -675,9 +779,9 @@ struct PhotoPickerRow: View {
 
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    guard cropSessionID == sessionID else { return }
                     if let pickedImage {
                         cropImage = pickedImage
+                        cropSessionID = sessionID
                     } else {
                         resetCropSession()
                     }
@@ -704,6 +808,13 @@ struct PhotoPickerRow: View {
         photoPickerItem = nil
     }
 
+    private func beginCroppingCurrentPhoto() {
+        guard let image else { return }
+        cropLoadTask?.cancel()
+        cropImage = image
+        cropSessionID = UUID()
+    }
+
     private var image: UIImage? {
         PhotoImageCache.shared.image(from: photoData)
     }
@@ -712,41 +823,39 @@ struct PhotoPickerRow: View {
         VStack(spacing: 10) {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
 
             Text("添加截图")
                 .font(.headline.weight(.semibold))
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 156)
-        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
     }
 
     private func editorPhotoPreview(image: UIImage) -> some View {
         Image(uiImage: image)
             .resizable()
-            .scaledToFill()
+            .scaledToFit()
             .frame(maxWidth: .infinity)
-            .aspectRatio(PhotoCropperView.cropAspectRatio, contentMode: .fit)
+            .frame(height: 220)
             .background(Color(uiColor: .tertiarySystemFill))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                     .stroke(Color.primary.opacity(0.06), lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
     }
 }
 
 struct PhotoCropperView: View {
-    static let cropAspectRatio: CGFloat = 1.0
-
     let image: UIImage
     let onUse: (UIImage) -> Void
     let onCancel: () -> Void
@@ -754,50 +863,104 @@ struct PhotoCropperView: View {
     @StateObject private var cropController = PhotoCropController()
 
     var body: some View {
-        VStack(spacing: 18) {
-            HStack {
-                Button("取消") {
-                    onCancel()
+        ZStack {
+            LinearGradient(
+                colors: [Color.black, Color(red: 0.08, green: 0.08, blue: 0.1)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+
+            VStack(spacing: 16) {
+                CropEditorHeader()
+
+                CropImageView(image: image, controller: cropController)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(.white.opacity(0.22), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(0.32), radius: 24, y: 12)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 16)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            CropEditorActionBar(
+                onCancel: onCancel,
+                onUse: { onUse(cropController.croppedImage() ?? image) }
+            )
+        }
+    }
+}
+
+private struct CropEditorHeader: View {
+    var body: some View {
+        Text("裁切截图")
+            .font(.title3.weight(.semibold))
+        .foregroundStyle(.white)
+        .padding(.top, 12)
+    }
+}
+
+private struct CropEditorActionBar: View {
+    let onCancel: () -> Void
+    let onUse: () -> Void
+
+    var body: some View {
+        if #available(iOS 26.0, *) {
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Label("取消", systemImage: "xmark")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
                 }
+                .buttonStyle(.glass)
 
-                Spacer()
-
-                Text("裁切截图")
-                    .font(.headline.weight(.semibold))
-
-                Spacer()
-
-                Button("使用") {
-                    onUse(cropController.croppedImage() ?? image)
+                Button(action: onUse) {
+                    Label("完成", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .offset(x: -4)
                 }
-                .fontWeight(.semibold)
+                .buttonStyle(.glassProminent)
+                .tint(AppTheme.readablePrimary)
+                .foregroundStyle(AppTheme.foreground(on: AppTheme.readablePrimary))
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-
-            Spacer(minLength: 20)
-
-            CropImageView(image: image, controller: cropController)
-                .aspectRatio(Self.cropAspectRatio, contentMode: .fit)
-                .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(.white.opacity(0.82), lineWidth: 2)
+            .font(.headline)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 28)
+        } else {
+            HStack(spacing: 12) {
+                Button(action: onCancel) {
+                    Label("取消", systemImage: "xmark")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
                 }
-                .shadow(color: .black.opacity(0.35), radius: 18, x: 0, y: 10)
+                .buttonStyle(.bordered)
+                .tint(.white)
 
-            Text("拖动照片调整位置，双指缩放后再使用")
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.white.opacity(0.62))
-                .multilineTextAlignment(.center)
-
-            Spacer()
+                Button(action: onUse) {
+                    Label("完成", systemImage: "checkmark")
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 54)
+                        .offset(x: -4)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(AppTheme.readablePrimary)
+                .foregroundStyle(AppTheme.foreground(on: AppTheme.readablePrimary))
+            }
+            .foregroundStyle(.white)
+            .font(.headline)
+            .padding(.horizontal, 16)
+            .padding(.top, 10)
+            .padding(.bottom, 28)
+            .background(.ultraThinMaterial)
         }
-        .padding(.horizontal, 18)
-        .padding(.bottom, 28)
-        .background(Color.black.ignoresSafeArea())
     }
 }
 
@@ -875,41 +1038,55 @@ struct CropImageView: UIViewRepresentable {
     }
 }
 
-final class CropImageContainerView: UIView, UIScrollViewDelegate {
+final class CropImageContainerView: UIView {
     var image: UIImage? {
         didSet {
             guard image !== oldValue else { return }
             imageView.image = image
-            didConfigureImage = false
-            scrollView.zoomScale = 1
+            cropRect = .zero
             setNeedsLayout()
         }
     }
 
-    private let scrollView = UIScrollView()
     private let imageView = UIImageView()
-    private var didConfigureImage = false
-    private var configuredBoundsSize: CGSize = .zero
+    private let dimLayer = CAShapeLayer()
+    private let cropInteractionView = UIView()
+    private let minimumCropSize: CGFloat = 64
+    private var imageFrame: CGRect = .zero
+    private var cropRect: CGRect = .zero
+    private var gestureStartRect: CGRect = .zero
+    private var handles: [UIView] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         clipsToBounds = true
-        backgroundColor = .secondarySystemBackground
+        backgroundColor = .black
 
-        scrollView.delegate = self
-        scrollView.backgroundColor = .clear
-        scrollView.minimumZoomScale = 1
-        scrollView.maximumZoomScale = 5
-        scrollView.bouncesZoom = true
-        scrollView.showsHorizontalScrollIndicator = false
-        scrollView.showsVerticalScrollIndicator = false
-        scrollView.contentInsetAdjustmentBehavior = .never
-
-        imageView.contentMode = .scaleAspectFill
+        imageView.contentMode = .scaleAspectFit
         imageView.clipsToBounds = true
+        addSubview(imageView)
 
-        scrollView.addSubview(imageView)
-        addSubview(scrollView)
+        dimLayer.fillRule = .evenOdd
+        dimLayer.fillColor = UIColor.black.withAlphaComponent(0.58).cgColor
+        layer.addSublayer(dimLayer)
+
+        cropInteractionView.backgroundColor = .clear
+        cropInteractionView.layer.borderColor = UIColor.white.cgColor
+        cropInteractionView.layer.borderWidth = 2
+        cropInteractionView.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(moveCropRect(_:))))
+        addSubview(cropInteractionView)
+
+        for corner in 0..<4 {
+            let handle = UIView()
+            handle.tag = corner
+            handle.backgroundColor = .white
+            handle.layer.cornerRadius = 9
+            handle.layer.borderWidth = 1
+            handle.layer.borderColor = UIColor.black.withAlphaComponent(0.35).cgColor
+            handle.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(resizeCropRect(_:))))
+            addSubview(handle)
+            handles.append(handle)
+        }
     }
 
     @available(*, unavailable)
@@ -919,12 +1096,14 @@ final class CropImageContainerView: UIView, UIScrollViewDelegate {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        scrollView.frame = bounds
-        configureImageFrameIfNeeded()
-    }
+        imageView.frame = bounds
+        guard let image, image.size.width > 0, image.size.height > 0 else { return }
 
-    func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-        imageView
+        imageFrame = aspectFitRect(imageSize: image.size, in: bounds)
+        if cropRect.isEmpty || !imageFrame.contains(cropRect) {
+            cropRect = imageFrame.insetBy(dx: min(24, imageFrame.width * 0.08), dy: min(24, imageFrame.height * 0.08))
+        }
+        updateCropOverlay()
     }
 
     func croppedImage() -> UIImage? {
@@ -932,36 +1111,29 @@ final class CropImageContainerView: UIView, UIScrollViewDelegate {
             let image,
             image.size.width > 0,
             image.size.height > 0,
-            imageView.bounds.width > 0,
-            imageView.bounds.height > 0,
-            scrollView.bounds.width > 0,
-            scrollView.bounds.height > 0
+            imageFrame.width > 0,
+            imageFrame.height > 0,
+            cropRect.width > 0,
+            cropRect.height > 0
         else {
             return image
         }
 
-        let zoomScale = max(scrollView.zoomScale, 0.0001)
-        let visibleRect = CGRect(
-            x: scrollView.contentOffset.x / zoomScale,
-            y: scrollView.contentOffset.y / zoomScale,
-            width: scrollView.bounds.width / zoomScale,
-            height: scrollView.bounds.height / zoomScale
-        )
+        let imageCropRect = CGRect(
+            x: (cropRect.minX - imageFrame.minX) * image.size.width / imageFrame.width,
+            y: (cropRect.minY - imageFrame.minY) * image.size.height / imageFrame.height,
+            width: cropRect.width * image.size.width / imageFrame.width,
+            height: cropRect.height * image.size.height / imageFrame.height
+        ).intersection(CGRect(origin: .zero, size: image.size))
 
-        let imageScaleX = image.size.width / imageView.bounds.width
-        let imageScaleY = image.size.height / imageView.bounds.height
-        let cropRect = visibleRect
-            .applying(CGAffineTransform(scaleX: imageScaleX, y: imageScaleY))
-            .intersection(CGRect(origin: .zero, size: image.size))
+        guard imageCropRect.width > 1, imageCropRect.height > 1 else { return image }
 
-        guard cropRect.width > 1, cropRect.height > 1 else { return image }
-
-        let renderer = UIGraphicsImageRenderer(size: cropRect.size)
+        let renderer = UIGraphicsImageRenderer(size: imageCropRect.size)
         return renderer.image { _ in
             image.draw(
                 in: CGRect(
-                    x: -cropRect.origin.x,
-                    y: -cropRect.origin.y,
+                    x: -imageCropRect.origin.x,
+                    y: -imageCropRect.origin.y,
                     width: image.size.width,
                     height: image.size.height
                 )
@@ -969,34 +1141,74 @@ final class CropImageContainerView: UIView, UIScrollViewDelegate {
         }
     }
 
-    private func configureImageFrameIfNeeded() {
-        guard
-            let image,
-            bounds.width > 0,
-            bounds.height > 0,
-            image.size.width > 0,
-            image.size.height > 0,
-            !didConfigureImage || configuredBoundsSize != bounds.size
-        else {
-            return
+    @objc private func moveCropRect(_ gesture: UIPanGestureRecognizer) {
+        if gesture.state == .began {
+            gestureStartRect = cropRect
+        }
+        let translation = gesture.translation(in: self)
+        var movedRect = gestureStartRect.offsetBy(dx: translation.x, dy: translation.y)
+        movedRect.origin.x = min(max(movedRect.minX, imageFrame.minX), imageFrame.maxX - movedRect.width)
+        movedRect.origin.y = min(max(movedRect.minY, imageFrame.minY), imageFrame.maxY - movedRect.height)
+        cropRect = movedRect
+        updateCropOverlay()
+    }
+
+    @objc private func resizeCropRect(_ gesture: UIPanGestureRecognizer) {
+        guard let handle = gesture.view else { return }
+        if gesture.state == .began {
+            gestureStartRect = cropRect
+        }
+        let translation = gesture.translation(in: self)
+        var minX = gestureStartRect.minX
+        var maxX = gestureStartRect.maxX
+        var minY = gestureStartRect.minY
+        var maxY = gestureStartRect.maxY
+
+        if handle.tag == 0 || handle.tag == 2 {
+            minX = min(max(gestureStartRect.minX + translation.x, imageFrame.minX), maxX - minimumCropSize)
+        } else {
+            maxX = max(min(gestureStartRect.maxX + translation.x, imageFrame.maxX), minX + minimumCropSize)
         }
 
-        let widthScale = bounds.width / image.size.width
-        let heightScale = bounds.height / image.size.height
-        let fillScale = max(widthScale, heightScale)
-        let imageSize = CGSize(width: image.size.width * fillScale, height: image.size.height * fillScale)
+        if handle.tag == 0 || handle.tag == 1 {
+            minY = min(max(gestureStartRect.minY + translation.y, imageFrame.minY), maxY - minimumCropSize)
+        } else {
+            maxY = max(min(gestureStartRect.maxY + translation.y, imageFrame.maxY), minY + minimumCropSize)
+        }
 
-        scrollView.zoomScale = 1
-        imageView.bounds = CGRect(origin: .zero, size: imageSize)
-        imageView.frame = CGRect(origin: .zero, size: imageSize)
-        scrollView.contentSize = imageSize
-        scrollView.contentOffset = CGPoint(
-            x: max((imageSize.width - bounds.width) / 2, 0),
-            y: max((imageSize.height - bounds.height) / 2, 0)
+        cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        updateCropOverlay()
+    }
+
+    private func updateCropOverlay() {
+        cropInteractionView.frame = cropRect
+        let handleSize = CGSize(width: 18, height: 18)
+        let centers = [
+            CGPoint(x: cropRect.minX, y: cropRect.minY),
+            CGPoint(x: cropRect.maxX, y: cropRect.minY),
+            CGPoint(x: cropRect.minX, y: cropRect.maxY),
+            CGPoint(x: cropRect.maxX, y: cropRect.maxY)
+        ]
+        for (handle, center) in zip(handles, centers) {
+            handle.bounds = CGRect(origin: .zero, size: handleSize)
+            handle.center = center
+        }
+
+        let path = UIBezierPath(rect: bounds)
+        path.append(UIBezierPath(rect: cropRect))
+        dimLayer.frame = bounds
+        dimLayer.path = path.cgPath
+    }
+
+    private func aspectFitRect(imageSize: CGSize, in container: CGRect) -> CGRect {
+        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
+        let size = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(
+            x: container.midX - size.width / 2,
+            y: container.midY - size.height / 2,
+            width: size.width,
+            height: size.height
         )
-
-        configuredBoundsSize = bounds.size
-        didConfigureImage = true
     }
 }
 
@@ -1004,19 +1216,25 @@ struct AmountField: View {
     @Binding var amount: Double
     let title: String
     var placeholder: String = ""
+    var showsCurrencyIcon = true
+    var textAlignment: TextAlignment = .leading
+    var inputFont: Font = .body
 
     @State private var textValue: String = ""
     @State private var didInit = false
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: "yensign.circle.fill")
-                .font(.title2)
-                .foregroundStyle(AppTheme.primary)
-                .frame(width: 34)
+            if showsCurrencyIcon {
+                Image(systemName: "yensign.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(AppTheme.readablePrimary)
+                    .frame(width: 34)
+            }
             TextField(placeholder.isEmpty ? title : placeholder, text: $textValue)
                 .keyboardType(.decimalPad)
-                .font(.body)
+                .multilineTextAlignment(textAlignment)
+                .font(inputFont)
                 .onChange(of: textValue) { _, newValue in
                     let cleaned = newValue.replacingOccurrences(of: "，", with: ".")
                     if let parsed = Double(cleaned) {
@@ -1026,7 +1244,7 @@ struct AmountField: View {
                     }
                 }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, showsCurrencyIcon ? 4 : 0)
         .accessibilityLabel(title)
         .onAppear {
             guard !didInit else { return }
@@ -1047,7 +1265,7 @@ struct PoolMonthSelectorRow: View {
             HStack(spacing: 10) {
                 Image(systemName: "calendar")
                     .font(.subheadline.weight(.bold))
-                    .foregroundStyle(AppTheme.primary)
+                    .foregroundStyle(AppTheme.readablePrimary)
                     .frame(width: 30, height: 30)
                     .background(AppTheme.primary.opacity(0.12), in: Circle())
 
@@ -1063,7 +1281,7 @@ struct PoolMonthSelectorRow: View {
                     Image(systemName: "chevron.right")
                         .font(.caption.weight(.bold))
                 }
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 7)
                 .background(AppTheme.primary.opacity(0.1), in: Capsule())
@@ -1083,6 +1301,7 @@ struct PoolMonthSelectorRow: View {
 struct RecordThumbnail: View {
     let photoData: Data?
     let size: CGFloat
+    var onTap: ((UIImage) -> Void)? = nil
 
     @State private var showFullScreen = false
 
@@ -1093,7 +1312,11 @@ struct RecordThumbnail: View {
                     .resizable()
                     .scaledToFill()
                     .onTapGesture {
-                        showFullScreen = true
+                        if let onTap {
+                            onTap(image)
+                        } else {
+                            showFullScreen = true
+                        }
                     }
             } else {
                 Image(systemName: "photo")
@@ -1104,13 +1327,15 @@ struct RecordThumbnail: View {
             }
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.75), lineWidth: 1)
         }
         .fullScreenCover(isPresented: $showFullScreen) {
-            PhotoFullScreenView(image: image)
+            if onTap == nil {
+                PhotoFullScreenView(image: image)
+            }
         }
     }
 
@@ -1276,19 +1501,6 @@ final class ZoomablePhotoContainerView: UIView, UIScrollViewDelegate, UIGestureR
         frame.origin.x = frame.width < boundsSize.width ? (boundsSize.width - frame.width) / 2 : 0
         frame.origin.y = frame.height < boundsSize.height ? (boundsSize.height - frame.height) / 2 : 0
         imageView.frame = frame
-    }
-}
-
-struct WorkflowBadge: View {
-    let workflow: AdWorkflow
-
-    var body: some View {
-        Label(workflow.rawValue, systemImage: workflow.symbolName)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(workflow.tint)
-            .labelStyle(.titleAndIcon)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
     }
 }
 

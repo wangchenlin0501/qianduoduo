@@ -3,7 +3,6 @@
 //  钱多多
 //
 
-import AVFoundation
 import SwiftUI
 
 struct PublishCelebrationOverlay: View {
@@ -57,14 +56,13 @@ struct PublishCelebrationOverlay: View {
 private final class PublishCelebrationEffects {
     static let shared = PublishCelebrationEffects()
 
-    private var player: AVAudioPlayer?
     private let successFeedback = UINotificationFeedbackGenerator()
     private let impactFeedback = UIImpactFeedbackGenerator(style: .soft)
 
     func play() {
         successFeedback.prepare()
         impactFeedback.prepare()
-        playSound()
+        PublishCelebrationAudio.shared.playCelebration()
 
         successFeedback.notificationOccurred(.success)
         Task { @MainActor in
@@ -73,20 +71,6 @@ private final class PublishCelebrationEffects {
         }
     }
 
-    private func playSound() {
-        guard let url = Bundle.main.url(forResource: "PublishCelebrationSound", withExtension: "m4a") else {
-            return
-        }
-
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default, options: [.mixWithOthers])
-            player = try AVAudioPlayer(contentsOf: url)
-            player?.prepareToPlay()
-            player?.play()
-        } catch {
-            player = nil
-        }
-    }
 }
 
 private struct CatClapCelebration: View {

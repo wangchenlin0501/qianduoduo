@@ -276,6 +276,7 @@ enum PartnershipType: String, CaseIterable, Identifiable {
     case consignment = "寄拍"
     case giftedShoot = "送拍"
     case exchange = "置换"
+    case reported = "报备"
 
     var id: String { rawValue }
 
@@ -287,6 +288,10 @@ enum PartnershipType: String, CaseIterable, Identifiable {
         self != .exchange
     }
 
+    var usesLook: Bool {
+        self != .reported
+    }
+
     var tint: Color {
         switch self {
         case .consignment:
@@ -295,6 +300,8 @@ enum PartnershipType: String, CaseIterable, Identifiable {
             AppTheme.giftedShoot
         case .exchange:
             AppTheme.exchange
+        case .reported:
+            AppTheme.primary
         }
     }
 
@@ -306,6 +313,8 @@ enum PartnershipType: String, CaseIterable, Identifiable {
             "gift.fill"
         case .exchange:
             "arrow.2.squarepath"
+        case .reported:
+            "doc.text.fill"
         }
     }
 }
@@ -401,6 +410,8 @@ struct PoolRecordSelection: Identifiable {
 struct PoolPhotoSelection: Identifiable {
     let id = UUID()
     let image: UIImage
+    let sourceFrame: CGRect
+    let sourceRecordID: NSManagedObjectID?
 }
 
 extension Notification.Name {

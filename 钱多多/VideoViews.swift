@@ -28,6 +28,12 @@ struct VideosPage: View {
     private var allLikeSnapshots: FetchedResults<VideoLikeSnapshot>
 
     @State private var selectedMonth = Date()
+    @AppStorage("videoViewMode") private var viewMode: VideoViewMode = .list
+    @State private var selectedCalendarDay = dayOnly(Date())
+    @State private var selectedCalendarGroup: VideoGroup?
+    @State private var calendarDragScope = UUID()
+    @State private var calendarError: String?
+    @State private var generatedCalendarBrandListDraft: GeneratedBrandListDraft?
     @State private var filter: VideoListFilter = .all
     @State private var searchText = ""
     @State private var showingNewVideo = false
@@ -85,11 +91,23 @@ struct VideosPage: View {
     private var publishedGroups: [VideoGroup] {
         visibleGroups
             .filter(\.allPublished)
-            .sorted(by: videoGroupPublishSort)
+            .sorted(by: videoGroupPublishedSort)
     }
 
     private var hasVisibleGroups: Bool {
         !pendingGroups.isEmpty || !scheduledGroups.isEmpty || !publishedGroups.isEmpty
+    }
+
+    private var calendarGroups: [VideoGroup] {
+        visibleGroups.filter { group in
+            guard let date = group.monthDate else { return false }
+            return qddCalendar.isDate(date, equalTo: selectedMonth, toGranularity: .month)
+        }
+        .sorted(by: videoGroupPublishSort)
+    }
+
+    private var newVideoInitialDate: Date {
+        viewMode == .calendar ? selectedCalendarDay : selectedMonth
     }
 
     var body: some View {
@@ -100,25 +118,47 @@ struct VideosPage: View {
                 }
                 .wideListRow()
 
-                if !hasVisibleGroups {
-                    Section("视频排期") {
-                        ContentUnavailableView(
-                            query.isEmpty ? "还没有视频" : "没有找到视频",
-                            systemImage: query.isEmpty ? "calendar.badge.plus" : "magnifyingglass",
-                            description: Text(query.isEmpty ? "从池子里选择广告，组成一期视频" : "换个品牌名或微信号试试")
-                        )
-                    }
-                }
-
                 if !pendingGroups.isEmpty {
-                    videoSection(title: "待定区", groups: pendingGroups, delete: deletePendingVideoGroups)
+                    videoSection(title: "未选发布时间", groups: pendingGroups, delete: deletePendingVideoGroups)
                 }
 
-                if !scheduledGroups.isEmpty {
-                    videoSection(title: "已选发布时间", groups: scheduledGroups, delete: deleteScheduledVideoGroups)
+                Section {
+                    if viewMode == .calendar {
+                        VideoMonthCalendar(
+                            month: selectedMonth,
+                            groups: calendarGroups,
+                            dragScope: calendarDragScope,
+                            openVideo: { selectedCalendarGroup = $0 },
+                            generateBrandImage: { generatedCalendarBrandListDraft = GeneratedBrandListDraft(text: $0) },
+                            addVideo: { date in
+                                selectedCalendarDay = date
+                                showingNewVideo = true
+                            },
+                            resolveDestination: calendarDropDestination,
+                            moveVideo: moveCalendarVideo
+                        )
+                        .wideListRow(top: 8, bottom: 8)
+                    } else if !scheduledGroups.isEmpty {
+                        videoRows(groups: scheduledGroups, delete: deleteScheduledVideoGroups)
+                    } else {
+                        ContentUnavailableView(
+                            hasVisibleGroups ? "暂无已选日期的视频" : (query.isEmpty ? "还没有视频" : "没有找到视频"),
+                            systemImage: query.isEmpty ? "calendar.badge.plus" : "magnifyingglass"
+                        )
+                        .wideListRow()
+                    }
+                } header: {
+                    HStack {
+                        Text("已选发布时间")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(Color(uiColor: .secondaryLabel))
+                        Spacer(minLength: 12)
+                        VideoViewModeToggle(viewMode: $viewMode)
+                    }
+                    .textCase(nil)
                 }
 
-                if !publishedGroups.isEmpty {
+                if viewMode == .list && !publishedGroups.isEmpty {
                     videoSection(title: "已发布视频", groups: publishedGroups, delete: deletePublishedVideoGroups)
                 }
             }
@@ -126,7 +166,19 @@ struct VideosPage: View {
             .listStyle(.insetGrouped)
             .listSectionSpacing(.compact)
             .softPageBackground()
-            .searchable(text: $searchText, prompt: "搜索品牌、微信、视频")
+            .searchable(text: $searchText, prompt: "搜索本月品牌、微信、视频")
+            .navigationDestination(item: $selectedCalendarGroup) { group in
+                VideoDetailView(group: group)
+                    .environment(\.managedObjectContext, viewContext)
+            }
+            .alert("无法调整排期", isPresented: Binding(
+                get: { calendarError != nil },
+                set: { if !$0 { calendarError = nil } }
+            )) {
+                Button("好的", role: .cancel) { calendarError = nil }
+            } message: {
+                Text(calendarError ?? "")
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
@@ -147,9 +199,12 @@ struct VideosPage: View {
             }
             .sheet(isPresented: $showingNewVideo) {
                 NavigationStack {
-                    NewVideoView(initialDate: selectedMonth)
+                    NewVideoView(initialDate: newVideoInitialDate, schedulesInitialDate: viewMode == .calendar)
                 }
                 .environment(\.managedObjectContext, viewContext)
+            }
+            .sheet(item: $generatedCalendarBrandListDraft) { draft in
+                BrandListImagePreview(initialText: draft.text)
             }
             .sheet(item: $editingLikesGroup) { group in
                 if let publishedDate = group.records.compactMap(\.publishedDate).first {
@@ -159,6 +214,11 @@ struct VideosPage: View {
                     .environment(\.managedObjectContext, viewContext)
                 }
             }
+            .onChange(of: selectedMonth) { _, month in
+                selectedCalendarDay = qddCalendar.isDate(month, equalTo: Date(), toGranularity: .month)
+                    ? dayOnly(Date())
+                    : monthStart(month)
+            }
             .onReceive(NotificationCenter.default.publisher(for: .adRecordsDidChange)) { _ in
                 refreshToken = UUID()
             }
@@ -167,35 +227,131 @@ struct VideosPage: View {
 
     @ViewBuilder
     private func videoSection(title: String, groups: [VideoGroup], delete: @escaping (IndexSet) -> Void) -> some View {
-        Section(title) {
-            ForEach(groups) { group in
-                ZStack {
-                    NavigationLink {
-                        VideoDetailView(group: group)
-                            .environment(\.managedObjectContext, viewContext)
-                    } label: {
-                        EmptyView()
-                    }
-                    .opacity(0)
+        Section {
+            videoRows(groups: groups, delete: delete)
+        } header: {
+            Text(title)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(Color(uiColor: .secondaryLabel))
+                .textCase(nil)
+        }
+    }
 
-                    VideoGroupRow(
-                        group: group,
-                        latestLikeCount: latestLikeSnapshot(for: group)?.likeCount,
-                        onEditLikes: { editingLikesGroup = group }
-                    )
-                        .recordCard()
+    @ViewBuilder
+    private func videoRows(groups: [VideoGroup], delete: @escaping (IndexSet) -> Void) -> some View {
+        ForEach(groups) { group in
+            ZStack {
+                NavigationLink {
+                    VideoDetailView(group: group)
+                        .environment(\.managedObjectContext, viewContext)
+                } label: {
+                    EmptyView()
                 }
-                .floatingCardRow()
-                .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                    Button(role: .destructive) {
-                        releaseVideo(group)
-                    } label: {
-                        Label("删除", systemImage: "trash")
-                    }
+                .opacity(0)
+
+                VideoGroupRow(
+                    group: group,
+                    latestLikeCount: latestLikeSnapshot(for: group)?.likeCount,
+                    pendingDragScope: viewMode == .calendar ? calendarDragScope : nil,
+                    onEditLikes: { editingLikesGroup = group }
+                )
+                    .recordCard()
+            }
+            .floatingCardRow()
+            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                Button(role: .destructive) {
+                    releaseVideo(group)
+                } label: {
+                    Label("删除", systemImage: "trash")
                 }
             }
-            .onDelete(perform: delete)
         }
+        .onDelete(perform: delete)
+    }
+
+    private func calendarMovePlan(_ recordURI: String, to destination: Date) throws -> VideoCalendarMovePlan {
+        let groups = allGroups
+        guard let source = groups.first(where: { group in
+            group.records.contains { $0.objectID.uriRepresentation().absoluteString == recordURI }
+        }) else { throw VideoCalendarMovePlan.MoveError.unknownVideo }
+
+        // Include hidden groups when checking occupancy, so filters cannot create overlaps.
+        let slots = groups.map { group in
+            VideoCalendarSlot(id: scheduleTargetID(name: group.name, date: group.date), date: group.monthDate, isPublished: group.allPublished)
+        }
+        return try VideoCalendarMovePlan(
+            sourceID: scheduleTargetID(name: source.name, date: source.date),
+            destination: destination,
+            slots: slots,
+            calendar: qddCalendar
+        )
+    }
+
+    private func calendarDropDestination(_ recordURI: String, to destination: Date) -> Date? {
+        try? calendarMovePlan(recordURI, to: destination).destinationDate
+    }
+
+    private func moveCalendarVideo(_ recordURI: String, to destination: Date) -> Date? {
+        do {
+            let plan = try calendarMovePlan(recordURI, to: destination)
+            guard !plan.changes.isEmpty else { return plan.destinationDate }
+            let visibleIDs = Set((calendarGroups + pendingGroups).map { scheduleTargetID(name: $0.name, date: $0.date) })
+            guard plan.changes.allSatisfy({ visibleIDs.contains($0.id) }) else {
+                calendarError = "目标日期已有被筛选隐藏的视频，请清除筛选后再调整。"
+                return nil
+            }
+
+            let groupsByID = Dictionary(uniqueKeysWithValues: allGroups.map {
+                (scheduleTargetID(name: $0.name, date: $0.date), $0)
+            })
+            // Fetch both sides before a swap, including when the titles are identical.
+            let updates = try plan.changes.map { change -> (VideoGroup, Date, [VideoLikeSnapshot]) in
+                guard let group = groupsByID[change.id] else {
+                    throw VideoCalendarMovePlan.MoveError.unknownVideo
+                }
+                return (group, change.date, try fetchVideoLikeSnapshots(videoName: group.name, videoDate: group.date, in: viewContext))
+            }
+            let previousRecords = updates.flatMap { $0.0.records }.map {
+                ($0, $0.dictionaryWithValues(forKeys: ["publishDate", "updatedAt", "commentReminderID"]))
+            }
+            let previousSnapshots = updates.flatMap { $0.2 }.map {
+                ($0, $0.dictionaryWithValues(forKeys: ["videoDate", "updatedAt"]))
+            }
+
+            do {
+                let now = Date()
+                for (group, date, snapshots) in updates {
+                    for record in group.records {
+                        record.commentReminderID = CommentReminderStore.eventID(for: record)
+                        record.publishDate = date
+                        record.updatedAt = now
+                    }
+                    for snapshot in snapshots {
+                        snapshot.videoDate = date
+                        snapshot.updatedAt = now
+                    }
+                }
+                try viewContext.save()
+            } catch {
+                previousRecords.forEach { $0.0.setValuesForKeys($0.1) }
+                previousSnapshots.forEach { $0.0.setValuesForKeys($0.1) }
+                throw error
+            }
+
+            viewContext.processPendingChanges()
+            selectedCalendarDay = plan.destinationDate
+            notifyRecordsChanged()
+            return plan.destinationDate
+        } catch VideoCalendarMovePlan.MoveError.publishedVideo {
+            calendarError = "已发布视频不能通过拖动调整日期。"
+        } catch VideoCalendarMovePlan.MoveError.multipleVideosOnDay {
+            calendarError = "这两天存在重复排期，请先在列表中调整后再拖动。"
+        } catch VideoCalendarMovePlan.MoveError.noAvailableDay {
+            calendarError = "本月没有空余日期，请切换到其他月份安排。"
+        } catch {
+            calendarError = "排期未保存，请重试。\(error.localizedDescription)"
+        }
+        return nil
     }
 
     private func groupMatchesSelectedMonth(_ group: VideoGroup) -> Bool {
@@ -238,6 +394,16 @@ struct VideosPage: View {
         }
         if first.order != second.order {
             return first.order < second.order
+        }
+        return first.title.localizedStandardCompare(second.title) == .orderedAscending
+    }
+
+    private func videoGroupPublishedSort(_ first: VideoGroup, _ second: VideoGroup) -> Bool {
+        if first.publishedSortDate != second.publishedSortDate {
+            return first.publishedSortDate > second.publishedSortDate
+        }
+        if first.order != second.order {
+            return first.order > second.order
         }
         return first.title.localizedStandardCompare(second.title) == .orderedAscending
     }
@@ -667,33 +833,43 @@ struct VideoDetailView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
-            if event.completedAt == nil {
-                Button {
-                    isMarkingComment = true
-                    Task {
-                        let saved = await reminders.markCompleted(id: event.id)
-                        if !saved { reminderError = reminders.lastError ?? "暂时无法保存，请稍后再试。" }
-                        isMarkingComment = false
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        if isMarkingComment {
-                            ProgressView().tint(.white)
-                        } else {
-                            Image(systemName: "checkmark.bubble.fill")
-                        }
-                        Text(isMarkingComment ? "保存中" : "标记已评论")
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .frame(minHeight: 32)
-                    .padding(.horizontal, 4)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(AppTheme.primary)
-                .disabled(isMarkingComment)
+            if isMarkingComment {
+                ProgressView()
+                    .frame(width: 51, height: 31)
+            } else {
+                Toggle("已评论", isOn: Binding(
+                    get: { event.completedAt != nil },
+                    set: { setCommentCompleted($0, event: event) }
+                ))
+                .labelsHidden()
+                .tint(AppTheme.readablePrimary)
+                .frame(width: 51)
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func setCommentCompleted(_ isCompleted: Bool, event: CommentReminderEvent) {
+        isMarkingComment = true
+        if isCompleted {
+            Task {
+                let saved = await reminders.markCompleted(id: event.id)
+                if !saved { reminderError = reminders.lastError ?? "暂时无法保存，请稍后再试。" }
+                isMarkingComment = false
+            }
+        } else {
+            records
+                .filter { CommentReminderStore.eventID(for: $0) == event.id }
+                .forEach {
+                    $0.brandCommentedAt = nil
+                    $0.updatedAt = Date()
+                }
+            _ = saveContext()
+            Task {
+                await reminders.reconcileNow()
+                isMarkingComment = false
+            }
+        }
     }
 
     @discardableResult
@@ -719,13 +895,13 @@ struct VideoLikeLatestCard: View {
             HStack {
                 Label("最新点赞量", systemImage: "heart.fill")
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AppTheme.primary)
+                    .foregroundStyle(AppTheme.readablePrimary)
 
                 Spacer()
 
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold))
-                    .foregroundStyle(AppTheme.primary)
+                    .foregroundStyle(AppTheme.readablePrimary)
                     .frame(width: 28, height: 28)
                     .background(AppTheme.primary.opacity(0.1), in: Circle())
             }
@@ -747,7 +923,7 @@ struct VideoLikeLatestCard: View {
                             .fontWeight(.semibold)
                     }
                     .font(.caption)
-                    .foregroundStyle(AppTheme.primary)
+                    .foregroundStyle(AppTheme.readablePrimary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
                     .background(AppTheme.primary.opacity(0.1), in: Capsule())
@@ -819,7 +995,7 @@ struct VideoLikeDataEditor: View {
                     VStack(spacing: 14) {
                         Image(systemName: "heart.fill")
                             .font(.title2)
-                            .foregroundStyle(AppTheme.primary)
+                            .foregroundStyle(AppTheme.readablePrimary)
                             .frame(width: 48, height: 48)
                             .background(AppTheme.primary.opacity(0.1), in: Circle())
 
@@ -836,14 +1012,14 @@ struct VideoLikeDataEditor: View {
                             .monospacedDigit()
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.center)
-                            .tint(AppTheme.primary)
+                            .tint(AppTheme.readablePrimary)
                             .frame(maxWidth: .infinity, minHeight: 82)
                             .minimumScaleFactor(0.6)
                             .accessibilityLabel("点赞量")
 
                         Text(videoPublishedElapsedText(from: publishedDate, to: recordedAt))
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(AppTheme.primary)
+                            .foregroundStyle(AppTheme.readablePrimary)
 
                         if let errorMessage {
                             Label(errorMessage, systemImage: "exclamationmark.circle.fill")
@@ -863,7 +1039,7 @@ struct VideoLikeDataEditor: View {
                             .multilineTextAlignment(.center)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(AppTheme.primary)
+                    .tint(AppTheme.readablePrimary)
                     .disabled(parsedCount == nil)
                 }
             }
@@ -895,7 +1071,7 @@ struct VideoLikeDataEditor: View {
                             } label: {
                                 Label("编辑", systemImage: "pencil")
                             }
-                            .tint(AppTheme.primary)
+                            .tint(AppTheme.readablePrimary)
                         }
                     }
                 }
@@ -905,7 +1081,7 @@ struct VideoLikeDataEditor: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(SoftPageBackground())
-        .tint(AppTheme.primary)
+        .tint(AppTheme.readablePrimary)
         .scrollDismissesKeyboard(.interactively)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -985,7 +1161,7 @@ struct VideoLikeHistoryRow: View {
         HStack(spacing: 12) {
             Image(systemName: "heart.fill")
                 .font(.subheadline)
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
                 .frame(width: 34, height: 34)
                 .background(AppTheme.primary.opacity(0.1), in: Circle())
 
@@ -1057,7 +1233,7 @@ struct VideoLikeEditorView: View {
                 VStack(spacing: 14) {
                     Image(systemName: "heart.fill")
                         .font(.system(size: 28, weight: .bold))
-                        .foregroundStyle(AppTheme.primary)
+                        .foregroundStyle(AppTheme.readablePrimary)
                         .frame(width: 58, height: 58)
                         .background(AppTheme.primary.opacity(0.1), in: Circle())
 
@@ -1070,7 +1246,7 @@ struct VideoLikeEditorView: View {
                         .keyboardType(.numberPad)
                         .multilineTextAlignment(.center)
                         .focused($isCountFocused)
-                        .tint(AppTheme.primary)
+                        .tint(AppTheme.readablePrimary)
                         .frame(maxWidth: .infinity, minHeight: 74)
                         .minimumScaleFactor(0.6)
                         .accessibilityLabel("点赞量")
@@ -1087,7 +1263,7 @@ struct VideoLikeEditorView: View {
                             .font(.subheadline.weight(.semibold))
                         Text(videoPublishedElapsedText(from: publishedDate, to: recordedAt))
                             .font(.caption)
-                            .foregroundStyle(AppTheme.primary)
+                            .foregroundStyle(AppTheme.readablePrimary)
                     }
 
                     if let errorMessage {
@@ -1107,7 +1283,7 @@ struct VideoLikeEditorView: View {
                         .frame(maxWidth: .infinity, minHeight: 48)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(AppTheme.primary)
+                .tint(AppTheme.readablePrimary)
                 .disabled(parsedCount == nil)
             }
             .padding(.horizontal, AppLayout.editorHorizontalInset)
@@ -1242,6 +1418,7 @@ struct NewVideoView: View {
     private var allRecords: FetchedResults<AdRecord>
 
     @State private var videoName = ""
+    @State private var showingDateConflict = false
     @State private var hasVideoDate = false
     @State private var videoDate = Date()
     @State private var selectedIDs = Set<NSManagedObjectID>()
@@ -1252,8 +1429,9 @@ struct NewVideoView: View {
     @State private var lookFilter: Int?
     @AppStorage(demoDataHiddenKey) private var isDemoDataHidden = false
 
-    init(initialDate: Date = Date()) {
+    init(initialDate: Date = Date(), schedulesInitialDate: Bool = false) {
         _videoDate = State(initialValue: initialDate)
+        _hasVideoDate = State(initialValue: schedulesInitialDate)
     }
 
     private var poolRecords: [AdRecord] {
@@ -1281,14 +1459,26 @@ struct NewVideoView: View {
     var body: some View {
         Form {
             Section("视频") {
-                TextField("视频名称/期数", text: $videoName)
-                Toggle("设置发布时间", isOn: $hasVideoDate)
-                if hasVideoDate {
-                    DatePicker("发布日期", selection: $videoDate, displayedComponents: .date)
-                } else {
-                    Label("发布时间待定", systemImage: "calendar.badge.clock")
-                        .foregroundStyle(.secondary)
+                VStack(spacing: 0) {
+                    EditorCardRow {
+                        TextField("视频名称/期数", text: $videoName)
+                    }
+                    EditorCardRow {
+                        Toggle("设置发布时间", isOn: $hasVideoDate)
+                    }
+                    if hasVideoDate {
+                        EditorCardRow(showsDivider: false) {
+                            DatePicker("发布日期", selection: $videoDate, displayedComponents: .date)
+                        }
+                    } else {
+                        EditorCardRow(showsDivider: false) {
+                            Label("发布时间待定", systemImage: "calendar.badge.clock")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
+                .recordCard()
+                .floatingCardRow()
             }
 
             PoolPickFilterControls(
@@ -1311,6 +1501,11 @@ struct NewVideoView: View {
             )
         }
         .navigationTitle("新视频")
+        .alert("这一天已有视频", isPresented: $showingDateConflict) {
+            Button("好的", role: .cancel) { }
+        } message: {
+            Text("一天只安排一条视频，请选择其他日期。")
+        }
         .searchable(text: $searchText, prompt: "搜索品牌、微信")
         .softPageBackground()
         .toolbar {
@@ -1330,8 +1525,14 @@ struct NewVideoView: View {
 
     private func createVideo() {
         let name = videoName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let videoOrder = nextVideoOrder(in: viewContext)
         let scheduledDate = hasVideoDate ? dayOnly(videoDate) : nil
+        if let scheduledDate, makeVideoGroups(from: Array(allRecords)).contains(where: {
+            $0.monthDate.map { qddCalendar.isDate($0, inSameDayAs: scheduledDate) } ?? false
+        }) {
+            showingDateConflict = true
+            return
+        }
+        let videoOrder = nextVideoOrder(in: viewContext)
         let selectedRecords = poolRecords
             .filter { selectedIDs.contains($0.objectID) }
             .sorted(by: videoRecordSort)
@@ -1445,21 +1646,9 @@ struct AddPoolItemsView: View {
         let selectedRecords = poolRecords
             .filter { selectedIDs.contains($0.objectID) }
             .sorted(by: videoRecordSort)
-        let existingRecords = allRecords.filter {
-            $0.isAssignedToVideo && $0.videoTitle == videoName
-                && $0.publishDate.map(dayOnly) == videoDate.map(dayOnly)
-        }
-        let publication = CommentReminderStore.events(from: existingRecords).first
+        let publication = existingVideoPublication(name: videoName, date: videoDate, in: Array(allRecords))
         let firstNewOrder = nextVideoItemOrder(name: videoName, date: videoDate, in: viewContext)
-        prepareRecordsForVideo(selectedRecords, name: videoName, date: videoDate)
-        if let publication {
-            // Adding another brand to a published video is not a new publication.
-            for record in selectedRecords {
-                record.publishedDate = publication.publishedAt
-                record.commentReminderID = publication.id
-                record.brandCommentedAt = publication.completedAt
-            }
-        }
+        prepareRecordsForVideo(selectedRecords, name: videoName, date: videoDate, publication: publication)
         assignVideoOrder(to: selectedRecords, startingAt: firstNewOrder)
         do {
             try viewContext.save()
@@ -1476,6 +1665,12 @@ struct AddPoolItemsView: View {
 struct VideoInfoEditorView: View {
     @Environment(\.dismiss) private var dismiss
 
+    @FetchRequest(sortDescriptors: [NSSortDescriptor(keyPath: \AdRecord.createdAt, ascending: false)])
+    private var allRecords: FetchedResults<AdRecord>
+
+    private let originalScheduleID: String
+    @State private var showingDateConflict = false
+
     @State private var videoName: String
     @State private var hasVideoDate: Bool
     @State private var videoDate: Date
@@ -1483,6 +1678,7 @@ struct VideoInfoEditorView: View {
     let onSave: (String, Date?) -> Void
 
     init(videoName: String, videoDate: Date?, onSave: @escaping (String, Date?) -> Void) {
+        originalScheduleID = scheduleTargetID(name: videoName, date: videoDate)
         _videoName = State(initialValue: videoName)
         _hasVideoDate = State(initialValue: videoDate != nil)
         _videoDate = State(initialValue: videoDate ?? Date())
@@ -1512,6 +1708,11 @@ struct VideoInfoEditorView: View {
             }
         }
         .navigationTitle("编辑视频")
+        .alert("这一天已有视频", isPresented: $showingDateConflict) {
+            Button("好的", role: .cancel) { }
+        } message: {
+            Text("一天只安排一条视频，请选择其他日期。")
+        }
         .softPageBackground()
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -1521,6 +1722,13 @@ struct VideoInfoEditorView: View {
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("保存") {
+                    if hasVideoDate, makeVideoGroups(from: Array(allRecords)).contains(where: { group in
+                        scheduleTargetID(name: group.name, date: group.date) != originalScheduleID
+                            && (group.monthDate.map { qddCalendar.isDate($0, inSameDayAs: videoDate) } ?? false)
+                    }) {
+                        showingDateConflict = true
+                        return
+                    }
                     onSave(videoName, hasVideoDate ? videoDate : nil)
                     dismiss()
                 }
@@ -1545,7 +1753,9 @@ struct RecordRow: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.78)
                         .layoutPriority(1)
-                    LookChip(lookNumber: record.lookNumber)
+                    if record.usesLook {
+                        LookChip(lookNumber: record.lookNumber)
+                    }
                     Spacer(minLength: 12)
                     Text(record.amountColumnText)
                         .font(.headline)
@@ -1567,13 +1777,13 @@ struct RecordRow: View {
                     if let onToggleArrival {
                         Button(action: onToggleArrival) {
                             Label(record.arrivalText, systemImage: "shippingbox.fill")
-                                .foregroundStyle(record.arrivalDate != nil ? AppTheme.primary : .secondary)
+                                .foregroundStyle(record.arrivalDate != nil ? AppTheme.readablePrimary : .secondary)
                                 .lineLimit(1)
                         }
                         .buttonStyle(.plain)
                     } else {
                         Label(record.arrivalText, systemImage: "shippingbox.fill")
-                            .foregroundStyle(record.arrivalDate != nil ? AppTheme.primary : .secondary)
+                            .foregroundStyle(record.arrivalDate != nil ? AppTheme.readablePrimary : .secondary)
                             .lineLimit(1)
                     }
                 }
@@ -1590,37 +1800,22 @@ struct RecordRow: View {
 struct VideoGroupRow: View {
     let group: VideoGroup
     let latestLikeCount: Int64?
+    var pendingDragScope: UUID? = nil
     var onEditLikes: () -> Void = {}
     @State private var generatedBrandListDraft: GeneratedBrandListDraft?
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            DateSquare(date: group.date)
+            if let pendingDragScope, group.date == nil, !group.allPublished {
+                PendingVideoCalendarDragBadge(group: group, dragScope: pendingDragScope)
+                    .frame(width: 54, height: 54)
+            } else {
+                DateSquare(date: group.date)
+            }
 
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(group.title)
-                        .font(.title3.weight(.bold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.76)
-                        .layoutPriority(1)
-                        .contextMenu {
-                            Button {
-                                UIPasteboard.general.string = numberedBrandNamesCopyText(
-                                    group.records.map(\.titleText)
-                                )
-                            } label: {
-                                Label("复制品牌名", systemImage: "doc.on.doc")
-                            }
-
-                            Button {
-                                generatedBrandListDraft = GeneratedBrandListDraft(
-                                    text: numberedBrandNamesCopyText(group.records.map(\.titleText))
-                                )
-                            } label: {
-                                Label("生成图片", systemImage: "photo.badge.plus")
-                            }
-                        }
+                    videoTitle
 
                     Spacer(minLength: 6)
 
@@ -1646,7 +1841,7 @@ struct VideoGroupRow: View {
                                     } else {
                                         Label("记录点赞", systemImage: "heart.badge.plus")
                                             .font(.caption.weight(.bold))
-                                            .foregroundStyle(.white)
+                                            .foregroundStyle(AppTheme.onPrimary)
                                             .padding(.horizontal, 9)
                                             .frame(height: 28)
                                             .background(AppTheme.primary.gradient, in: Capsule())
@@ -1676,6 +1871,40 @@ struct VideoGroupRow: View {
             BrandListImagePreview(initialText: draft.text)
         }
     }
+
+    private var titleLabel: some View {
+        Text(group.title)
+            .font(.title3.weight(.bold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.76)
+            .layoutPriority(1)
+    }
+
+    @ViewBuilder
+    private var videoTitle: some View {
+        if group.allPublished {
+            titleLabel
+                .contextMenu {
+                    Button {
+                        UIPasteboard.general.string = numberedBrandNamesCopyText(
+                            group.records.map(\.titleText)
+                        )
+                    } label: {
+                        Label("复制品牌名", systemImage: "doc.on.doc")
+                    }
+
+                    Button {
+                        generatedBrandListDraft = GeneratedBrandListDraft(
+                            text: numberedBrandNamesCopyText(group.records.map(\.titleText))
+                        )
+                    } label: {
+                        Label("生成图片", systemImage: "photo.badge.plus")
+                    }
+                }
+        } else {
+            titleLabel
+        }
+    }
 }
 
 struct VideoLikeCountPill: View {
@@ -1690,7 +1919,7 @@ struct VideoLikeCountPill: View {
                 .monospacedDigit()
                 .lineLimit(1)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(AppTheme.onPrimary)
         .padding(.horizontal, 9)
         .frame(height: 28)
         .background(AppTheme.primary.gradient, in: Capsule())
@@ -1736,7 +1965,7 @@ private struct BrandListImagePreview: View {
                         .scaledToFit()
                         .frame(maxWidth: .infinity)
                         .background(Color.black)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous))
                         .shadow(color: .black.opacity(0.18), radius: 12, y: 6)
 
                     VStack(alignment: .leading, spacing: 8) {
@@ -1756,10 +1985,10 @@ private struct BrandListImagePreview: View {
                             .padding(10)
                             .background(
                                 Color(uiColor: .systemBackground),
-                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                in: RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                             )
                             .overlay {
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                                     .stroke(Color.secondary.opacity(0.18), lineWidth: 1)
                             }
                             .disabled(saveState == .saving)
@@ -1930,7 +2159,7 @@ struct SelectableRecordRow: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? AppTheme.primary : .secondary)
+                    .foregroundStyle(isSelected ? AppTheme.readablePrimary : .secondary)
                     .font(.title3)
                 PoolRecordRow(record: record)
             }
@@ -1964,7 +2193,7 @@ struct PoolScheduleFilterButton: View {
             Text(isUnscheduled ? "未排期" : "全部")
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(isUnscheduled ? AppTheme.primary : Color.primary)
+        .foregroundStyle(isUnscheduled ? AppTheme.readablePrimary : Color.primary)
         .frame(minWidth: 86, minHeight: 44)
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
@@ -2020,7 +2249,7 @@ struct VideoMetricTile: View {
         .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(tint.opacity(tint == .primary ? 0.06 : 0.1), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(tint.opacity(tint == .primary ? 0.06 : 0.1), in: RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous))
     }
 }
 
@@ -2032,49 +2261,36 @@ struct PublishToggleRow: View {
     let publishedDate: Date?
 
     var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) {
-                isPublished.toggle()
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(iconBackground)
+                    .frame(width: 48, height: 48)
+
+                Image(systemName: isPublished ? "checkmark.seal.fill" : "sparkles")
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(statusTint)
             }
-        } label: {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(iconBackground)
-                        .frame(width: 48, height: 48)
 
-                    Image(systemName: isPublished ? "checkmark.seal.fill" : "sparkles")
-                        .font(.title3.weight(.black))
-                        .foregroundStyle(statusTint)
-                }
+            VStack(alignment: .leading, spacing: 5) {
+                Text(isPublished ? "已发布完成" : "发布这一期")
+                    .font(.headline.weight(.heavy))
+                    .foregroundStyle(.primary)
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(isPublished ? "已发布完成" : "发布这一期")
-                        .font(.headline.weight(.heavy))
-                        .foregroundStyle(.primary)
-
-                    Text(subtitle)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-
-                Spacer(minLength: 10)
-
-                HStack(spacing: 5) {
-                    Text(isPublished ? "完成" : "发布")
-                        .font(.caption.weight(.heavy))
-                    Image(systemName: isPublished ? "checkmark" : "arrow.up.right")
-                        .font(.caption.weight(.heavy))
-                }
-                .foregroundStyle(.white)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(statusTint, in: Capsule(style: .continuous))
+                Text(subtitle)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Spacer(minLength: 10)
+
+            Toggle("发布状态", isOn: $isPublished)
+                .labelsHidden()
+                .tint(statusTint)
+                .frame(width: 51)
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var statusTint: Color {

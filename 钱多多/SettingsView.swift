@@ -12,21 +12,19 @@ import UniformTypeIdentifiers
 // MARK: - Settings Page
 
 struct SettingsPage: View {
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
-    @ObservedObject private var logger = AppLogger.shared
 
     @State private var showingExportShare = false
     @State private var exportFileURL: URL?
     @State private var showingImportPicker = false
     @State private var showingImportAlert = false
     @State private var importResultMessage = ""
-    @State private var showingClearConfirm = false
+    @State private var showingExportAlert = false
+    @State private var exportErrorMessage = ""
     @State private var showingDemoHideConfirm = false
-    @State private var showingCloudShare = false
-    @State private var sharingSyncSpace: SyncSpace?
-    @State private var sharingShare: CKShare?
-    @State private var sharingContainer: CKContainer?
+    @State private var sharingPresentation: CloudSharingPresentation?
+    @State private var sharingRequestID: UUID?
+    @State private var sharingTimeoutTask: Task<Void, Never>?
     @State private var isPreparingShare = false
     @State private var cloudAccountText = "检查中"
     @State private var showingSyncAlert = false
@@ -35,44 +33,61 @@ struct SettingsPage: View {
 
     var body: some View {
         List {
-            Section(
-                header: Text("共享同步"),
-                footer: Text("数据所有者创建共享并邀请协作者；接受邀请后，设备可同步同一份池子、视频、账本和粉丝数据。")
+            SettingsCardSection(
+                "共享同步",
+                footer: "创建共享并通过 Apple ID 邀请成员。对方接受后，可共同管理池子、视频、账本和粉丝数据。"
             ) {
-                HStack {
+                HStack(spacing: 12) {
                     Label("iCloud 状态", systemImage: "icloud.fill")
-                    Spacer()
+                    Spacer(minLength: 8)
                     Text(cloudAccountText)
                         .foregroundStyle(cloudAccountText == "可用" ? .green : .secondary)
+                        .multilineTextAlignment(.trailing)
                 }
+                .settingsRow()
+
+                SettingsRowDivider()
 
                 Button {
                     openCloudSharing()
                 } label: {
-                    Label(isPreparingShare ? "正在准备共享" : "创建/管理共享", systemImage: "person.2.badge.gearshape.fill")
+                    HStack(spacing: 12) {
+                        Label(isPreparingShare ? "正在准备共享" : "创建/管理共享", systemImage: "person.2.badge.gearshape.fill")
+                        Spacer(minLength: 8)
+                        if isPreparingShare { ProgressView().controlSize(.small) }
+                    }
+                    .settingsRow()
                 }
                 .disabled(isPreparingShare)
             }
 
-            Section(header: Text("数据管理")) {
+            ThemeColorSettingsSection()
+
+            SettingsCardSection("数据管理") {
                 Button {
                     exportData()
                 } label: {
                     Label("导出数据", systemImage: "square.and.arrow.up")
+                        .settingsRow()
                 }
+
+                SettingsRowDivider()
 
                 Button {
                     showingImportPicker = true
                 } label: {
                     Label("导入数据", systemImage: "square.and.arrow.down")
+                        .settingsRow()
                 }
             }
 
             CommentReminderSettingsSection()
 
-            Section(
-                header: Text("演示模式"),
-                footer: Text("临时隐藏所有记录，用来给他人展示空白软件；数据不会删除，随时可以恢复显示。")
+            PublishCelebrationSoundSettingsSection()
+
+            SettingsCardSection(
+                "演示模式",
+                footer: "临时隐藏所有记录，用来给他人展示空白软件；数据不会删除，随时可以恢复显示。"
             ) {
                 Button {
                     if isDemoDataHidden {
@@ -83,59 +98,41 @@ struct SettingsPage: View {
                     }
                 } label: {
                     Label(isDemoDataHidden ? "恢复显示所有数据" : "一键清空展示数据", systemImage: isDemoDataHidden ? "eye.fill" : "eye.slash.fill")
+                        .settingsRow()
                 }
-                .foregroundStyle(isDemoDataHidden ? AppTheme.primary : Color.red)
+                .foregroundStyle(isDemoDataHidden ? AppTheme.readablePrimary : Color.red)
             }
 
-            Section(header: Text("日志"), footer: Text("只保留最近 80 条运行日志，便于排查同步或其他问题")) {
-                if logger.logs.isEmpty {
-                    Text("暂无日志")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(logger.logs.reversed(), id: \.self) { log in
-                        Text(log)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                }
-            }
-
-            Section {
-                Button(role: .destructive) {
-                    showingClearConfirm = true
+            SettingsCardSection("日志") {
+                Button {
+                    exportLogs()
                 } label: {
-                    Label("清除日志", systemImage: "trash")
+                    Label("导出日志", systemImage: "doc.text")
+                        .settingsRow()
                 }
             }
         }
         .navigationTitle("设置")
         .listStyle(.insetGrouped)
+        .listSectionSpacing(.compact)
         .softPageBackground()
+        .tint(AppTheme.readablePrimary)
         .onAppear {
             refreshCloudAccountStatus()
-        }
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) {
-                Button("关闭") {
-                    dismiss()
-                }
-            }
         }
         .sheet(isPresented: $showingExportShare) {
             if let url = exportFileURL {
                 ShareSheet(activityItems: [url])
             }
         }
-        .sheet(isPresented: $showingCloudShare, onDismiss: resetSharingPresentation) {
-            if let sharingSyncSpace, let sharingShare, let sharingContainer {
-                CloudSharingView(
-                    syncSpace: sharingSyncSpace,
-                    share: sharingShare,
-                    container: sharingContainer
-                )
-            }
+        .sheet(item: $sharingPresentation) { presentation in
+            CloudSharingView(
+                syncSpaceID: presentation.syncSpaceID,
+                share: presentation.share,
+                container: presentation.container
+            )
         }
+        .onDisappear { stopPreparingShare() }
         .fileImporter(isPresented: $showingImportPicker, allowedContentTypes: [.json]) { result in
             handleImport(result)
         }
@@ -149,13 +146,10 @@ struct SettingsPage: View {
         } message: {
             Text(syncAlertMessage)
         }
-        .alert("确认清除", isPresented: $showingClearConfirm) {
-            Button("清除", role: .destructive) {
-                logger.clearLogs()
-            }
-            Button("取消", role: .cancel) { }
+        .alert("导出失败", isPresented: $showingExportAlert) {
+            Button("好的", role: .cancel) { }
         } message: {
-            Text("确定要清除所有日志吗？")
+            Text(exportErrorMessage)
         }
         .alert("一键清空展示数据", isPresented: $showingDemoHideConfirm) {
             Button("临时隐藏", role: .destructive) {
@@ -169,61 +163,41 @@ struct SettingsPage: View {
     }
 
     private func openCloudSharing() {
-        do {
-            let syncSpace = try PersistenceController.shared.prepareSharingSpace(in: viewContext)
-            isPreparingShare = true
+        guard !isPreparingShare else { return }
+        let requestID = UUID()
+        sharingRequestID = requestID
+        isPreparingShare = true
 
-            if let existingShare = PersistenceController.shared.existingShare(for: syncSpace) {
-                PersistenceController.shared.shareExistingRecordsIfNeeded(for: syncSpace, share: existingShare)
-                presentCloudSharing(
-                    syncSpace: syncSpace,
-                    share: existingShare,
-                    container: CKContainer(identifier: PersistenceController.cloudKitContainerIdentifier)
-                )
-                return
+        CloudSharingPreparationService.shared.prepare(requestID: requestID) { result in
+            guard sharingRequestID == requestID else { return }
+            stopPreparingShare()
+            switch result {
+            case .success(let presentation):
+                sharingPresentation = presentation
+            case .failure(let error):
+                syncAlertMessage = "准备共享失败：\(error.localizedDescription)"
+                showingSyncAlert = true
             }
-
-            PersistenceController.shared.share(syncSpace: syncSpace) { share, container, error in
-                DispatchQueue.main.async {
-                    isPreparingShare = false
-
-                    if let error {
-                        syncAlertMessage = "创建共享失败：\(PersistenceController.describe(error))"
-                        showingSyncAlert = true
-                        AppLogger.shared.log(syncAlertMessage)
-                        return
-                    }
-
-                    guard let share, let container else {
-                        syncAlertMessage = "创建共享失败：系统没有返回共享信息，请确认已登录 iCloud 后再试。"
-                        showingSyncAlert = true
-                        AppLogger.shared.log(syncAlertMessage)
-                        return
-                    }
-
-                    presentCloudSharing(syncSpace: syncSpace, share: share, container: container)
-                }
-            }
-        } catch {
-            isPreparingShare = false
-            syncAlertMessage = "准备共享失败：\(PersistenceController.describe(error))"
+        }
+        sharingTimeoutTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .seconds(30))
+            } catch { return }
+            guard sharingRequestID == requestID else { return }
+            stopPreparingShare()
+            syncAlertMessage = "iCloud 响应较慢，已停止等待。你可以继续使用其他功能，稍后再试。"
             showingSyncAlert = true
-            AppLogger.shared.log(syncAlertMessage)
+            AppLogger.shared.log("共享界面等待超时，后台任务保留，重试时复用同一任务")
         }
     }
 
-    private func presentCloudSharing(syncSpace: SyncSpace, share: CKShare, container: CKContainer) {
-        sharingSyncSpace = syncSpace
-        sharingShare = share
-        sharingContainer = container
-        isPreparingShare = false
-        showingCloudShare = true
-    }
-
-    private func resetSharingPresentation() {
-        sharingSyncSpace = nil
-        sharingShare = nil
-        sharingContainer = nil
+    private func stopPreparingShare() {
+        sharingTimeoutTask?.cancel()
+        sharingTimeoutTask = nil
+        if let sharingRequestID {
+            CloudSharingPreparationService.shared.stopWaiting(requestID: sharingRequestID)
+        }
+        sharingRequestID = nil
         isPreparingShare = false
     }
 
@@ -255,14 +229,38 @@ struct SettingsPage: View {
     }
 
     private func exportData() {
-        guard let jsonData = exportRecords(context: viewContext) else { return }
-        let fileName = "钱多多_备份_\(shortExportDate()).json"
+        guard let jsonData = exportRecords(context: viewContext) else {
+            exportErrorMessage = "暂时无法导出数据，请稍后重试。"
+            showingExportAlert = true
+            return
+        }
+        presentExport(data: jsonData, fileName: "钱多多_备份_\(shortExportDate()).json")
+    }
+
+    private func exportLogs() {
+        let logs = AppLogger.shared.logs
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
+        let text = [
+            "钱多多运行日志",
+            "版本：\(version)（\(build)）",
+            "系统：iOS \(UIDevice.current.systemVersion)",
+            "导出时间：\(shortExportDate())",
+            "",
+            logs.isEmpty ? "暂无运行日志。" : logs.joined(separator: "\n")
+        ].joined(separator: "\n")
+        presentExport(data: Data(text.utf8), fileName: "钱多多_日志_\(shortExportDate()).txt")
+    }
+
+    private func presentExport(data: Data, fileName: String) {
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         do {
-            try jsonData.write(to: tempURL)
+            try data.write(to: tempURL, options: .atomic)
             exportFileURL = tempURL
             showingExportShare = true
         } catch {
+            exportErrorMessage = "文件导出失败，请重试。\(error.localizedDescription)"
+            showingExportAlert = true
             AppLogger.shared.log("写入导出文件失败: \(error.localizedDescription)")
         }
     }
@@ -278,10 +276,10 @@ struct SettingsPage: View {
             defer { url.stopAccessingSecurityScopedResource() }
             do {
                 let data = try Data(contentsOf: url)
-                let count = importRecords(data: data, context: viewContext)
-                importResultMessage = count > 0 ? "成功导入 \(count) 条记录" : "导入失败，请检查文件格式"
+                let summary = try importRecords(data: data, context: viewContext)
+                importResultMessage = summary.message
             } catch {
-                importResultMessage = "读取文件失败: \(error.localizedDescription)"
+                importResultMessage = "导入失败，请检查备份文件是否完整。\n\(error.localizedDescription)"
             }
             showingImportAlert = true
         case .failure(let error):
@@ -309,12 +307,12 @@ struct ShareSheet: UIViewControllerRepresentable {
 }
 
 struct CloudSharingView: UIViewControllerRepresentable {
-    @ObservedObject var syncSpace: SyncSpace
+    let syncSpaceID: NSManagedObjectID
     let share: CKShare
     let container: CKContainer
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(syncSpace: syncSpace)
+        Coordinator(syncSpaceID: syncSpaceID)
     }
 
     func makeUIViewController(context: Context) -> UICloudSharingController {
@@ -327,10 +325,10 @@ struct CloudSharingView: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
 
     final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        private let syncSpace: SyncSpace
+        private let syncSpaceID: NSManagedObjectID
 
-        init(syncSpace: SyncSpace) {
-            self.syncSpace = syncSpace
+        init(syncSpaceID: NSManagedObjectID) {
+            self.syncSpaceID = syncSpaceID
         }
 
         func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {
@@ -343,7 +341,7 @@ struct CloudSharingView: UIViewControllerRepresentable {
 
         func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {
             if let share = csc.share {
-                PersistenceController.shared.persistUpdatedShare(share, for: syncSpace)
+                PersistenceController.shared.persistUpdatedShare(share, for: syncSpaceID)
             }
             AppLogger.shared.log("共享邀请已保存")
         }

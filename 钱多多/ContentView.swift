@@ -11,12 +11,10 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
-    @State private var summaryTapCount = 0
-    @State private var showingSettings = false
     @ObservedObject private var reminders = VideoCommentNotificationManager.shared
 
     var body: some View {
-        TabView(selection: tabSelection) {
+        TabView(selection: $selectedTab) {
             SummaryPage()
                 .environment(\.managedObjectContext, viewContext)
                 .tabItem {
@@ -44,14 +42,15 @@ struct ContentView: View {
                     Label("账本", systemImage: "list.clipboard.fill")
                 }
                 .tag(3)
+
         }
         .environment(\.locale, Locale(identifier: "zh_CN"))
-        .tint(AppTheme.primary)
+        .environment(\.appThemeColor, AppThemeSettings.shared.color)
+        .tint(AppTheme.readablePrimary)
         .sheet(isPresented: Binding(
-            get: { showingSettings || reminders.openedReminder != nil },
+            get: { reminders.openedReminder != nil },
             set: { isPresented in
                 if !isPresented {
-                    showingSettings = false
                     reminders.openedReminder = nil
                 }
             }
@@ -59,15 +58,13 @@ struct ContentView: View {
             NavigationStack {
                 if let link = reminders.openedReminder {
                     CommentReminderDestination(reminderID: link.id)
-                } else {
-                    SettingsPage()
                 }
             }
             .environment(\.managedObjectContext, viewContext)
-            .id(reminders.openedReminder?.id ?? "settings")
+            .id(reminders.openedReminder?.id ?? "reminder")
         }
         .onAppear {
-            PersistenceController.shared.repairOwnedShareMembership(in: viewContext)
+            PersistenceController.shared.repairOwnedShareMembership()
             reminders.configure(container: PersistenceController.shared.container)
         }
         .task {
@@ -75,34 +72,15 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
-                PersistenceController.shared.repairOwnedShareMembership(in: viewContext)
+                PersistenceController.shared.repairOwnedShareMembership()
                 Task { await reminders.publicationDidSave() }
             }
         }
         .onOpenURL { reminders.open($0) }
         .onChange(of: reminders.openedReminder?.id) { _, id in
             guard id != nil else { return }
-            showingSettings = false
             selectedTab = 2
         }
-    }
-
-    private var tabSelection: Binding<Int> {
-        Binding(
-            get: { selectedTab },
-            set: { newTab in
-                if newTab == 0 && selectedTab == 0 {
-                    summaryTapCount += 1
-                    if summaryTapCount >= 5 {
-                        summaryTapCount = 0
-                        showingSettings = true
-                    }
-                } else {
-                    summaryTapCount = 0
-                }
-                selectedTab = newTab
-            }
-        )
     }
 }
 

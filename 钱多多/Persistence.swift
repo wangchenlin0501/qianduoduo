@@ -163,20 +163,6 @@ final class PersistenceController {
         return makeSyncSpace(in: context, store: privatePersistentStore)
     }
 
-    @discardableResult
-    func prepareSharingSpace(in context: NSManagedObjectContext) throws -> SyncSpace {
-        let syncSpace = try activeSyncSpace(in: context)
-        try attachPrivateOrphanRecords(to: syncSpace, in: context)
-        if syncSpace.objectID.isTemporaryID {
-            try context.obtainPermanentIDs(for: [syncSpace])
-        }
-        if context.hasChanges {
-            try context.save()
-        }
-        context.processPendingChanges()
-        return syncSpace
-    }
-
     func prepareNewRecord(_ record: AdRecord, in context: NSManagedObjectContext) {
         do {
             let syncSpace = try activeSyncSpace(in: context)
@@ -227,31 +213,6 @@ final class PersistenceController {
         }
     }
 
-    func share(
-        syncSpace: SyncSpace,
-        completion: @escaping (CKShare?, CKContainer?, Error?) -> Void
-    ) {
-        container.share(objectsToShare(with: syncSpace), to: nil) { _, share, cloudKitContainer, error in
-            if let share {
-                share[CKShare.SystemFieldKey.title] = "钱多多共享数据" as NSString
-            }
-            completion(share, cloudKitContainer, error)
-        }
-    }
-
-    func shareExistingRecordsIfNeeded(for syncSpace: SyncSpace, share: CKShare) {
-        let objects = objectsToShare(with: syncSpace)
-        guard objects.count > 1 else { return }
-
-        container.share(objects, to: share) { _, _, _, error in
-            if let error {
-                AppLogger.shared.log("补充共享记录失败: \(Self.describe(error))")
-            } else {
-                AppLogger.shared.log("已检查并补充共享记录 \(objects.count - 1) 条")
-            }
-        }
-    }
-
     func shareOwnedRecordIfNeeded(_ record: AdRecord) {
         shareOwnedRecordsIfNeeded([record])
     }
@@ -285,7 +246,7 @@ final class PersistenceController {
         scheduleOwnedShareRetry(for: objectIDs, attempt: 1, delayOverride: 0.8)
     }
 
-    func repairOwnedShareMembership(in context: NSManagedObjectContext? = nil) {
+    func repairOwnedShareMembership() {
         scheduleOwnedShareRepair()
     }
 
@@ -448,10 +409,10 @@ final class PersistenceController {
 
     func persistUpdatedShare(
         _ share: CKShare,
-        for syncSpace: SyncSpace,
+        for syncSpaceID: NSManagedObjectID,
         completion: ((Error?) -> Void)? = nil
     ) {
-        guard let store = syncSpace.objectID.persistentStore else {
+        guard let store = syncSpaceID.persistentStore else {
             completion?(nil)
             return
         }
@@ -544,67 +505,6 @@ final class PersistenceController {
         syncSpace.createdAt = Date()
         syncSpace.updatedAt = Date()
         return syncSpace
-    }
-
-    private func attachPrivateOrphanRecords(to syncSpace: SyncSpace, in context: NSManagedObjectContext) throws {
-        guard let syncSpaceStore = syncSpace.objectID.persistentStore else { return }
-
-        let request: NSFetchRequest<AdRecord> = AdRecord.fetchRequest()
-        request.predicate = NSPredicate(format: "syncSpace == nil")
-        let records = try context.fetch(request)
-
-        for record in records {
-            if record.objectID.isTemporaryID {
-                context.assign(record, to: syncSpaceStore)
-                record.syncSpace = syncSpace
-            } else if record.objectID.persistentStore == syncSpaceStore {
-                record.syncSpace = syncSpace
-            }
-        }
-
-        let followerRequest: NSFetchRequest<FollowerSnapshot> = FollowerSnapshot.fetchRequest()
-        followerRequest.predicate = NSPredicate(format: "syncSpace == nil")
-        let followerSnapshots = try context.fetch(followerRequest)
-
-        for snapshot in followerSnapshots {
-            if snapshot.objectID.isTemporaryID {
-                context.assign(snapshot, to: syncSpaceStore)
-                snapshot.syncSpace = syncSpace
-            } else if snapshot.objectID.persistentStore == syncSpaceStore {
-                snapshot.syncSpace = syncSpace
-            }
-        }
-
-        let videoLikeRequest: NSFetchRequest<VideoLikeSnapshot> = VideoLikeSnapshot.fetchRequest()
-        videoLikeRequest.predicate = NSPredicate(format: "syncSpace == nil")
-        let videoLikeSnapshots = try context.fetch(videoLikeRequest)
-
-        for snapshot in videoLikeSnapshots {
-            if snapshot.objectID.isTemporaryID {
-                context.assign(snapshot, to: syncSpaceStore)
-                snapshot.syncSpace = syncSpace
-            } else if snapshot.objectID.persistentStore == syncSpaceStore {
-                snapshot.syncSpace = syncSpace
-            }
-        }
-
-        if !records.isEmpty || !followerSnapshots.isEmpty || !videoLikeSnapshots.isEmpty {
-            syncSpace.updatedAt = Date()
-        }
-    }
-
-    private func objectsToShare(with syncSpace: SyncSpace) -> [NSManagedObject] {
-        var objects: [NSManagedObject] = [syncSpace]
-        if let records = syncSpace.records?.allObjects as? [AdRecord] {
-            objects.append(contentsOf: records)
-        }
-        if let followerSnapshots = syncSpace.followerSnapshots?.allObjects as? [FollowerSnapshot] {
-            objects.append(contentsOf: followerSnapshots)
-        }
-        if let videoLikeSnapshots = syncSpace.videoLikeSnapshots?.allObjects as? [VideoLikeSnapshot] {
-            objects.append(contentsOf: videoLikeSnapshots)
-        }
-        return objects
     }
 
     static func describe(_ error: Error) -> String {

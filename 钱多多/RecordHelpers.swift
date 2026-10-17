@@ -35,7 +35,21 @@ extension AdRecord {
 
     var partnershipValue: PartnershipType {
         get { PartnershipType(storedValue: productCode) }
-        set { productCode = newValue.rawValue }
+        set {
+            productCode = newValue.rawValue
+            if !newValue.usesLook {
+                lookNumber = 0
+            }
+        }
+    }
+
+    var usesLook: Bool {
+        partnershipValue.usesLook
+    }
+
+    func matchesLookFilter(_ selectedLook: Int?) -> Bool {
+        guard let selectedLook else { return true }
+        return usesLook && Int(lookNumber) == selectedLook
     }
 
     var needsPayment: Bool {
@@ -91,6 +105,9 @@ extension AdRecord {
 
     var subtitleText: String {
         let video = videoTitle.nonEmptyOr("未排视频")
+        if !usesLook {
+            return "\(categoryValue.rawValue) · \(video)"
+        }
         return "\(categoryValue.rawValue) · LOOK \(lookNumber) · \(video)"
     }
 
@@ -444,7 +461,7 @@ func monthStart(_ date: Date) -> Date {
 }
 
 func sortedLookNumbers(from records: [AdRecord]) -> [Int] {
-    Array(Set(records.map { Int($0.lookNumber) }.filter { $0 > 0 })).sorted()
+    Array(Set(records.filter(\.usesLook).map { Int($0.lookNumber) }.filter { $0 > 0 })).sorted()
 }
 
 func poolRecordSort(_ first: AdRecord, _ second: AdRecord) -> Bool {
@@ -506,7 +523,7 @@ func filterPoolRecords(
         let categoryMatches = category.map { record.categoryValue == $0 } ?? true
         let partnershipMatches = partnership.map { record.partnershipValue == $0 } ?? true
         let arrivalMatches = arrival.matches(record)
-        let lookMatches = lookNumber.map { Int(record.lookNumber) == $0 } ?? true
+        let lookMatches = record.matchesLookFilter(lookNumber)
         let searchMatches = query.isEmpty || record.searchableText.localizedCaseInsensitiveContains(query)
         return categoryMatches && partnershipMatches && arrivalMatches && lookMatches && searchMatches
     }
@@ -520,22 +537,39 @@ func videoRecordSort(_ first: AdRecord, _ second: AdRecord) -> Bool {
         return first.videoOrder > 0
     }
 
-    let firstLook = first.lookNumber > 0 ? first.lookNumber : Int16.max
-    let secondLook = second.lookNumber > 0 ? second.lookNumber : Int16.max
+    let firstLook = first.usesLook && first.lookNumber > 0 ? first.lookNumber : Int16.max
+    let secondLook = second.usesLook && second.lookNumber > 0 ? second.lookNumber : Int16.max
     if firstLook != secondLook {
         return firstLook < secondLook
     }
     return (first.createdAt ?? Date.distantPast) < (second.createdAt ?? Date.distantPast)
 }
 
-func prepareRecordsForVideo(_ records: [AdRecord], name: String, date: Date?) {
+func existingVideoPublication(
+    name: String,
+    date: Date?,
+    in records: [AdRecord],
+    excluding recordID: NSManagedObjectID? = nil
+) -> CommentReminderEvent? {
+    let existingRecords = records.filter { record in
+        record.objectID != recordID
+            && record.isAssignedToVideo
+            && record.videoTitle.nonEmptyOr("未命名视频") == name.nonEmptyOr("未命名视频")
+            && record.publishDate.map(dayOnly) == date.map(dayOnly)
+    }
+    return CommentReminderStore.events(from: existingRecords).first
+}
+
+func prepareRecordsForVideo(
+    _ records: [AdRecord], name: String, date: Date?, publication: CommentReminderEvent? = nil
+) {
     let scheduledDate = date.map(dayOnly)
     records.forEach { record in
         record.videoTitle = name
         record.publishDate = scheduledDate
-        record.publishedDate = nil
-        record.commentReminderID = nil
-        record.brandCommentedAt = nil
+        record.publishedDate = publication?.publishedAt
+        record.commentReminderID = publication?.id
+        record.brandCommentedAt = publication?.completedAt
         record.statusValue = .unpaid
         record.paidDate = nil
         record.paymentAccount = nil
@@ -549,13 +583,6 @@ func assignVideoOrder(to records: [AdRecord], startingAt start: Double) {
         let newOrder = start + Double(index)
         guard abs(record.videoOrder - newOrder) > 0.000_000_1 else { return }
         record.videoOrder = newOrder
-        record.updatedAt = Date()
-    }
-}
-
-func assignLookNumbers(to records: [AdRecord], startingAt start: Int = 1) {
-    records.enumerated().forEach { index, record in
-        record.lookNumber = Int16(clamping: start + index)
         record.updatedAt = Date()
     }
 }

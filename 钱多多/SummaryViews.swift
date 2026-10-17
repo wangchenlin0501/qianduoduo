@@ -245,6 +245,15 @@ struct SummaryPage: View {
                 .padding(.bottom, 16)
             }
             .navigationTitle("汇总")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    NavigationLink {
+                        SettingsPage()
+                    } label: {
+                        Label("设置", systemImage: "gearshape")
+                    }
+                }
+            }
             .softPageBackground()
             .onReceive(NotificationCenter.default.publisher(for: .adRecordsDidChange)) { _ in
                 refreshToken = UUID()
@@ -309,7 +318,7 @@ struct ContentPerformanceItem: Identifiable {
     }
 }
 
-private struct CardExpansionButton: View {
+struct CardExpansionButton: View {
     @Binding var isExpanded: Bool
 
     var body: some View {
@@ -329,7 +338,7 @@ private struct CardExpansionButton: View {
                         transaction.animation = nil
                     }
             }
-            .foregroundStyle(AppTheme.primary)
+            .foregroundStyle(AppTheme.readablePrimary)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(AppTheme.primary.opacity(0.1), in: Capsule())
@@ -470,7 +479,7 @@ struct ContentPerformanceCard: View {
                 .padding(.horizontal, 12)
                 .background(
                     Color(uiColor: .tertiarySystemFill),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    in: RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                 )
             }
 
@@ -646,28 +655,10 @@ struct SummaryDashboard: View {
     }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            VStack(alignment: .leading, spacing: 14) {
-                fixedOverview
-                    .fixedSize(horizontal: false, vertical: true)
-                    .layoutPriority(1)
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-
-                if isExpanded {
-                    Divider()
-
-                    detailsContent
-                        .fixedSize(horizontal: false, vertical: true)
-                        .transition(.opacity)
-                }
-            }
-            .padding(.vertical, 4)
-            .recordCard()
-
-            CardExpansionButton(isExpanded: $isExpanded)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+        ExpandableSummaryCard(isExpanded: $isExpanded) {
+            fixedOverview
+        } details: {
+            detailsContent
         }
     }
 
@@ -678,7 +669,7 @@ struct SummaryDashboard: View {
                 Spacer()
                 Text("\(businessStats.recordCount) 件")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(AppTheme.onPrimary)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(AppTheme.primary.gradient, in: Capsule())
@@ -808,7 +799,7 @@ struct MonthComparisonView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(9)
-                    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: AppLayout.compactControlCornerRadius, style: .continuous))
                 }
             }
         }
@@ -907,7 +898,7 @@ struct FollowerTrendPoint: Identifiable {
     let count: Int64
 }
 
-private let followerThemeColor = AppTheme.primary
+private var followerThemeColor: Color { AppTheme.readablePrimary }
 
 struct FollowerTrendCard: View {
     let snapshots: [FollowerSnapshot]
@@ -1060,7 +1051,7 @@ struct FollowerTrendCard: View {
                     }
                     .foregroundStyle(followerThemeColor)
                     .frame(maxWidth: .infinity, minHeight: 130)
-                    .background(followerThemeColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background(followerThemeColor.opacity(0.07), in: RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous))
                 }
                 .buttonStyle(.plain)
             }
@@ -1472,9 +1463,9 @@ struct SummaryTile: View {
         }
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
         .padding(12)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous)
                 .stroke(tint.opacity(0.08), lineWidth: 0.6)
         }
     }
@@ -1508,7 +1499,7 @@ private struct MonthlyAmountChart: View {
 
     @State private var selectedMonthPosition: Double?
 
-    private let averageColor = AppTheme.primary
+    private var averageColor: Color { AppTheme.readablePrimary }
 
     private var selectedMonth: MonthChartTotal? {
         guard let position = selectedMonthPosition, position.isFinite,
@@ -1717,7 +1708,7 @@ struct MonthSelector: View {
                         .font(.caption.weight(.bold))
                 }
                 .font(.headline.weight(.bold))
-                .foregroundStyle(AppTheme.primary)
+                .foregroundStyle(AppTheme.readablePrimary)
                 .padding(.horizontal, 16)
                 .frame(minHeight: 38)
                 .background(AppTheme.primary.opacity(0.1), in: Capsule())
@@ -1814,7 +1805,7 @@ struct MonthPickerView: View {
                                 .foregroundStyle(isSelected(month) ? .white : .primary)
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    RoundedRectangle(cornerRadius: AppLayout.compactControlCornerRadius, style: .continuous)
                                         .fill(isSelected(month) ? AppTheme.primary : Color(uiColor: .tertiarySystemFill))
                                 )
                         }

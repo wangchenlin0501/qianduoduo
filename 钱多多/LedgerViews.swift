@@ -166,15 +166,14 @@ struct LedgerRecordRow: View {
             DateSquare(date: record.reportDate, tint: record.statusValue == .paid ? AppTheme.primary : ledgerDateTint(for: record.reportDate))
 
             VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     Text(record.titleText)
                         .font(.headline.weight(.bold))
                         .lineLimit(1)
                         .minimumScaleFactor(0.76)
                         .layoutPriority(1)
-                    LookChip(lookNumber: record.lookNumber)
+                    PartnershipBadge(type: record.partnershipValue)
                 }
-                PartnershipBadge(type: record.partnershipValue)
                 Label(record.contactWeChat.nonEmptyOr("未填微信"), systemImage: "person.2.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -183,7 +182,7 @@ struct LedgerRecordRow: View {
                 if !record.videoTitle.nonEmptyOr("").isEmpty {
                     Label(record.videoTitle.nonEmptyOr(""), systemImage: "play.rectangle.fill")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(AppTheme.primary)
+                        .foregroundStyle(AppTheme.readablePrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.72)
                 }
@@ -299,7 +298,7 @@ struct CompactSummaryTile: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
                 .fill(tint == .secondary ? Color(uiColor: .tertiarySystemFill) : tint.opacity(0.08))
         )
     }

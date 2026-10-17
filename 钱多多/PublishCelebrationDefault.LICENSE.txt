@@ -1,0 +1,24 @@
+Default publication celebration sound
+
+Asset: PublishCelebrationDefault.wav
+Title: yay.mp3
+Creator: zut50
+Source: https://freesound.org/people/zut50/sounds/162395/
+License: CC0 1.0 Universal
+License URL: https://creativecommons.org/publicdomain/zero/1.0/
+Retrieved: 2026-10-17
+
+The source page identifies the work as Creative Commons 0 and permits
+copying, modification, distribution and commercial use.
+
+Public high-quality preview supplied by the source page:
+https://cdn.freesound.org/previews/162/162395_2645723-hq.mp3
+Downloaded preview SHA-256:
+18846a2c98227a8c91e84b10dd8c3251b2659c382b648196cba146ab67edf5ac
+
+Edits: full decoded preview (about 1.83 seconds); adjusted gain;
+20 ms fade-in and 100 ms fade-out; encoded as 44.1 kHz, mono, 16-bit PCM WAV.
+Edited asset SHA-256:
+ea21fa744b09365b2d4f3fdf627195fb945652236a6287ae3b1f1b1a06df600b
+
+Credit is retained for provenance. No author endorsement is implied.
