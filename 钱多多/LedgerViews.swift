@@ -18,6 +18,7 @@ struct LedgerPage: View {
     private var allRecords: FetchedResults<AdRecord>
 
     @State private var refreshToken = UUID()
+    @State private var saveError: NSError?
     @State private var searchText = ""
     @State private var filter: LedgerFilter = .all
     @State private var sortOption: LedgerSortOption = .dateNewest
@@ -68,11 +69,12 @@ struct LedgerPage: View {
                 Section {
                     LedgerSummaryStrip(records: monthLedgerRecords)
                 }
-                .wideListRow()
+                .wideListRow(bottom: 4)
 
                 Section("记录") {
                     if ledgerRecords.isEmpty {
                         ContentUnavailableView("没有记录", systemImage: "list.clipboard", description: Text("视频发布后会出现在这里"))
+                            .wideListRow()
                     } else {
                         ForEach(ledgerRecords, id: \.objectID) { record in
                             ZStack {
@@ -87,20 +89,25 @@ struct LedgerPage: View {
                                     .recordCard()
                             }
                             .floatingCardRow()
-                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                            // Deleting an earnings record is irreversible, so a long swipe must not delete by itself.
+                            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
                                     deleteLedgerRecord(record)
                                 } label: {
                                     Label("删除", systemImage: "trash")
                                 }
+                                .tint(AppTheme.danger)
                             }
                         }
                         .onDelete(perform: deleteLedgerRecords)
                     }
                 }
             }
+            .cloudSyncRefreshable()
             .navigationTitle("账本")
+            .saveFailureAlert($saveError)
             .listStyle(.insetGrouped)
+            .contentMargins(.horizontal, AppLayout.homeListContentMargin, for: .scrollContent)
             .listSectionSpacing(.compact)
             .softPageBackground()
             .searchable(text: $searchText, prompt: "搜索品牌、微信、视频")
@@ -147,14 +154,12 @@ struct LedgerPage: View {
     }
 
     private func saveContext() {
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
     }
 }
 
@@ -210,6 +215,7 @@ struct LedgerAmountColumn: View {
             if record.needsPayment {
                 Text(record.amountColumnText)
                     .font(.title3.weight(.bold))
+                    .monospacedDigit()
                     .foregroundStyle(record.statusValue.tint)
                     .lineLimit(1)
                     .minimumScaleFactor(0.68)
@@ -232,7 +238,7 @@ struct LedgerFilterButton: View {
             Text(isUnpaid ? "未打款" : "全部")
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(isUnpaid ? Color.red : Color.primary)
+        .foregroundStyle(isUnpaid ? AppTheme.danger : Color.primary)
         .frame(minWidth: 86, minHeight: 44)
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
@@ -270,8 +276,8 @@ struct LedgerSummaryStrip: View {
 
             HStack(spacing: 8) {
                 CompactSummaryTile(title: "合计", value: moneyText(stats.total), tint: .secondary)
-                CompactSummaryTile(title: "已到账", value: moneyText(stats.paid), tint: .green)
-                CompactSummaryTile(title: "未打款", value: moneyText(stats.unpaid), tint: .red)
+                CompactSummaryTile(title: "已到账", value: moneyText(stats.paid), tint: AppTheme.success)
+                CompactSummaryTile(title: "未打款", value: moneyText(stats.unpaid), tint: AppTheme.danger)
             }
         }
         .recordCard()
@@ -290,7 +296,8 @@ struct CompactSummaryTile: View {
                 .foregroundStyle(.secondary)
             Text(value)
                 .font(.headline.weight(.bold))
-                .foregroundStyle(tint == .secondary ? .primary : tint)
+                .monospacedDigit()
+                .foregroundStyle(tint == .secondary ? Color.primary : tint)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)
         }
@@ -298,8 +305,12 @@ struct CompactSummaryTile: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
-                .fill(tint == .secondary ? Color(uiColor: .tertiarySystemFill) : tint.opacity(0.08))
+            RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous)
+                .fill(tint == .secondary ? Color(uiColor: .tertiarySystemFill) : tint.opacity(0.18))
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous)
+                .stroke(tint == .secondary ? Color.clear : tint.opacity(0.22), lineWidth: 0.6)
+        }
     }
 }

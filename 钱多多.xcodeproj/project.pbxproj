@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		BC2609060000000000000001 /* CommentReminderWidget.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC2609060000000000000004 /* CommentReminderWidget.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BC2609070000000000000001 /* ShareToAssistant.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC2609070000000000000004 /* ShareToAssistant.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +33,13 @@
 			remoteGlobalIDString = BC2609060000000000000009;
 			remoteInfo = CommentReminderWidget;
 		};
+		BC2609070000000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 3EC017982FABB21600B10774 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC2609070000000000000009;
+			remoteInfo = ShareToAssistant;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -42,6 +50,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				BC2609060000000000000001 /* CommentReminderWidget.appex in Embed Foundation Extensions */,
+				BC2609070000000000000001 /* ShareToAssistant.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -49,11 +58,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		DD2609220000000000000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = SOURCE_ROOT; };
 		3EC017A02FABB21600B10774 /* 钱多多.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "钱多多.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3EC017B42FABB21900B10774 /* 钱多多Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "钱多多Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		3EC017BE2FABB21900B10774 /* 钱多多UITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "钱多多UITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC2609060000000000000004 /* CommentReminderWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = CommentReminderWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC2609070000000000000004 /* ShareToAssistant.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShareToAssistant.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		DD2609220000000000000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Signing.xcconfig; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -70,6 +80,13 @@
 				Info.plist,
 			);
 			target = BC2609060000000000000009 /* CommentReminderWidget */;
+		};
+		BC2609070000000000000005 /* Exceptions for "ShareToAssistant" folder in "ShareToAssistant" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = BC2609070000000000000009 /* ShareToAssistant */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -105,6 +122,14 @@
 			path = CommentReminderWidget;
 			sourceTree = "<group>";
 		};
+		BC2609070000000000000007 /* ShareToAssistant */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				BC2609070000000000000005 /* Exceptions for "ShareToAssistant" folder in "ShareToAssistant" target */,
+			);
+			path = ShareToAssistant;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -136,6 +161,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BC2609070000000000000008 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -145,9 +177,11 @@
 				3EC017A22FABB21600B10774 /* 钱多多 */,
 				BC2609060000000000000006 /* CommentReminderShared */,
 				BC2609060000000000000007 /* CommentReminderWidget */,
+				BC2609070000000000000007 /* ShareToAssistant */,
 				3EC017B72FABB21900B10774 /* 钱多多Tests */,
 				3EC017C12FABB21900B10774 /* 钱多多UITests */,
 				3EC017A12FABB21600B10774 /* Products */,
+				DD2609220000000000000001 /* Signing.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -156,6 +190,7 @@
 			children = (
 				3EC017A02FABB21600B10774 /* 钱多多.app */,
 				BC2609060000000000000004 /* CommentReminderWidget.appex */,
+				BC2609070000000000000004 /* ShareToAssistant.appex */,
 				3EC017B42FABB21900B10774 /* 钱多多Tests.xctest */,
 				3EC017BE2FABB21900B10774 /* 钱多多UITests.xctest */,
 			);
@@ -178,6 +213,7 @@
 			);
 			dependencies = (
 				BC260906000000000000000C /* PBXTargetDependency */,
+				BC260907000000000000000C /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				3EC017A22FABB21600B10774 /* 钱多多 */,
@@ -259,6 +295,28 @@
 			productReference = BC2609060000000000000004 /* CommentReminderWidget.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		BC2609070000000000000009 /* ShareToAssistant */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BC260907000000000000000F /* Build configuration list for PBXNativeTarget "ShareToAssistant" */;
+			buildPhases = (
+				BC260907000000000000000B /* Sources */,
+				BC2609070000000000000008 /* Frameworks */,
+				BC260907000000000000000A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BC2609070000000000000007 /* ShareToAssistant */,
+			);
+			name = ShareToAssistant;
+			packageProductDependencies = (
+			);
+			productName = ShareToAssistant;
+			productReference = BC2609070000000000000004 /* ShareToAssistant.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -283,6 +341,9 @@
 					BC2609060000000000000009 = {
 						CreatedOnToolsVersion = 26.2;
 					};
+					BC2609070000000000000009 = {
+						CreatedOnToolsVersion = 26.2;
+					};
 				};
 			};
 			buildConfigurationList = 3EC0179B2FABB21600B10774 /* Build configuration list for PBXProject "钱多多" */;
@@ -302,6 +363,7 @@
 			targets = (
 				3EC0179F2FABB21600B10774 /* 钱多多 */,
 				BC2609060000000000000009 /* CommentReminderWidget */,
+				BC2609070000000000000009 /* ShareToAssistant */,
 				3EC017B32FABB21900B10774 /* 钱多多Tests */,
 				3EC017BD2FABB21900B10774 /* 钱多多UITests */,
 			);
@@ -331,6 +393,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BC260906000000000000000A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC260907000000000000000A /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -368,6 +437,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BC260907000000000000000B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -386,6 +462,11 @@
 			target = BC2609060000000000000009 /* CommentReminderWidget */;
 			targetProxy = BC2609060000000000000002 /* PBXContainerItemProxy */;
 		};
+		BC260907000000000000000C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC2609070000000000000009 /* ShareToAssistant */;
+			targetProxy = BC2609070000000000000002 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -396,7 +477,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "钱多多/QianDuoDuo.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -411,7 +492,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -431,7 +512,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = "钱多多/QianDuoDuo.entitlements";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -446,7 +527,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -591,11 +672,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -613,11 +694,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)Tests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -634,10 +715,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)UITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -654,10 +735,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID)UITests";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -674,22 +755,24 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = CommentReminderWidget/CommentReminderWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CommentReminderWidget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "评论提醒";
+				INFOPLIST_KEY_CFBundleDisplayName = "待办与评论提醒";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID).CommentReminderWidget";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) QDD_WIDGET_EXTENSION";
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -703,20 +786,82 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = CommentReminderWidget/CommentReminderWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 17;
 				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = CommentReminderWidget/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "评论提醒";
+				INFOPLIST_KEY_CFBundleDisplayName = "待办与评论提醒";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.0;
+				MARKETING_VERSION = 2.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID).CommentReminderWidget";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) QDD_WIDGET_EXTENSION";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BC260907000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShareToAssistant/ShareToAssistant.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 17;
+				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareToAssistant/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "钱多多";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 2.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID).ShareToAssistant";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BC260907000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShareToAssistant/ShareToAssistant.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 17;
+				DEVELOPMENT_TEAM = "$(QDD_DEVELOPMENT_TEAM)";
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ShareToAssistant/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "钱多多";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.6;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 2.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(QDD_BUNDLE_ID).ShareToAssistant";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -772,6 +917,15 @@
 			buildConfigurations = (
 				BC260906000000000000000D /* Debug */,
 				BC260906000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BC260907000000000000000F /* Build configuration list for PBXNativeTarget "ShareToAssistant" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC260907000000000000000D /* Debug */,
+				BC260907000000000000000E /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

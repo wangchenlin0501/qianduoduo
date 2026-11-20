@@ -1,4 +1,4 @@
-// Runs on macOS with VideoCalendarMonth.swift and VideoCalendarMovePlan.swift.
+// Runs on macOS with VideoCalendarMonth.swift, VideoCalendarMovePlan.swift, and VideoCalendarTodo.swift.
 import Foundation
 
 @main
@@ -41,7 +41,38 @@ struct VerifyVideoCalendar {
         verifyMoves()
         verifyPendingPlacement()
         verifyPublishedProtection()
-        print("PASS: \(checks) month grids, dated-video moves, pending-video placement, nearest free days, forward tie-breaks, month boundaries, full months, and published-video protection.")
+        verifyTodoLayout()
+        print("PASS: \(checks) month grids, existing video moves and protection, plus mixed video/todo weeks, overflow expansion, and scaled task targets.")
+    }
+
+    static func verifyTodoLayout() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+        let month = calendar.date(from: DateComponents(year: 2026, month: 11, day: 1))!
+        let days = VideoCalendarMonth(containing: month, calendar: calendar).days
+        let busyDay = calendar.date(from: DateComponents(year: 2026, month: 11, day: 10))!
+        let busyWeek = days.firstIndex { $0 == busyDay }! / 7
+        func heights(count: Int, hasVideo: Bool, expanded: Bool, taskHeight: CGFloat = 48) -> [CGFloat] {
+            VideoCalendarContentLayout.weekHeights(
+                days: days, videoDays: hasVideo ? [busyDay] : [], todoCounts: [busyDay: count],
+                expandedDays: expanded ? [busyDay] : [], minimumHeight: 80, todoHeight: taskHeight
+            )
+        }
+        let empty = heights(count: 0, hasVideo: false, expanded: false)
+        precondition(empty.count == days.count / 7 && empty.allSatisfy { $0 == 80 })
+        let collapsed = heights(count: 7, hasVideo: true, expanded: false)
+        let expanded = heights(count: 7, hasVideo: true, expanded: true)
+        precondition(expanded[busyWeek] > collapsed[busyWeek], "Expanding must expose the remaining tasks in their original date cell")
+        for week in empty.indices where week != busyWeek {
+            precondition(collapsed[week] == empty[week] && expanded[week] == empty[week], "Only the affected week should grow")
+        }
+        precondition(collapsed == heights(count: 3, hasVideo: true, expanded: false), "Extra tasks must not make the collapsed grid taller")
+        precondition(heights(count: 2, hasVideo: true, expanded: false)[busyWeek]
+                     > heights(count: 2, hasVideo: false, expanded: false)[busyWeek], "Tasks must leave the existing video slot intact")
+        let lastTaskBottom = VideoCalendarContentLayout.todoTop(hasVideo: true) + 7 * 48 + 6 * VideoCalendarContentLayout.gap
+        precondition(expanded[busyWeek] > lastTaskBottom + 44, "The final task and collapse button must remain reachable")
+        precondition(heights(count: 7, hasVideo: true, expanded: true, taskHeight: 100)[busyWeek] > expanded[busyWeek], "Larger text must grow the task rows")
+        precondition(VideoCalendarContentLayout.weekHeights(days: [], videoDays: [], todoCounts: [:], expandedDays: [], minimumHeight: 80, todoHeight: 48).isEmpty)
     }
 
     static func verifyMoves() {

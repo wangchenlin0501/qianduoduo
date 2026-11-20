@@ -19,6 +19,10 @@ final class CloudSharingPreparationService {
     private var isRunning = false
 
     func prepare(requestID: UUID, completion: @escaping Completion) {
+        if let error = PersistenceController.shared.sharingConfigurationError {
+            completion(.failure(error))
+            return
+        }
         callbacks[requestID] = completion
         guard !isRunning else { return }
         isRunning = true
@@ -46,9 +50,19 @@ final class CloudSharingPreparationService {
         isRunning = false
         let completions = Array(callbacks.values)
         callbacks.removeAll()
+        var result = result
+        if case .failure(let error) = result,
+           let configurationError = CloudSyncErrorPolicy.configurationError(in: error) {
+            PersistenceController.shared.pauseSharingIfConfigurationError(error)
+            AppLogger.shared.log("准备共享失败：\(PersistenceController.describe(error))")
+            result = .failure(configurationError)
+        }
+        if let error = PersistenceController.shared.sharingConfigurationError {
+            result = .failure(error)
+        }
         switch result {
         case .success:
-            AppLogger.shared.log("共享准备完成")
+            AppLogger.shared.log("共享管理信息已就绪；云端上传和其他设备接收需等待同步事件确认")
             PersistenceController.shared.repairOwnedShareMembership()
         case .failure(let error):
             AppLogger.shared.log("准备共享失败：\(PersistenceController.describe(error))")
@@ -120,7 +134,7 @@ private nonisolated enum CloudSharingWorker {
             }
 
             guard let privateStore else { throw PreparationError.storeUnavailable }
-            for entityName in ["AdRecord", "FollowerSnapshot", "VideoLikeSnapshot"] {
+            for entityName in ["AdRecord", "FollowerSnapshot", "VideoLikeSnapshot", "TodoItem"] {
                 let orphanRequest = NSFetchRequest<NSManagedObject>(entityName: entityName)
                 orphanRequest.predicate = NSPredicate(format: "syncSpace == nil")
                 orphanRequest.affectedStores = [privateStore]

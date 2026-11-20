@@ -31,7 +31,7 @@ struct VideoViewModeToggle: View {
                         .font(.subheadline.weight(.bold))
                         .foregroundStyle(viewMode == mode ? AppTheme.onPrimary : Color.secondary)
                         .frame(width: 36, height: 36)
-                        .background(viewMode == mode ? AppTheme.primary : Color(uiColor: .tertiarySystemFill), in: Circle())
+                        .background(viewMode == mode ? AppTheme.primary : Color(uiColor: .secondarySystemGroupedBackground), in: Circle())
                         .overlay {
                             Circle()
                                 .stroke(viewMode == mode ? AppTheme.primary.opacity(0.35) : Color.primary.opacity(0.05), lineWidth: 1)
@@ -50,19 +50,30 @@ struct VideoMonthCalendar: View {
     @Environment(\.displayScale) private var displayScale
     let month: Date
     let groups: [VideoGroup]
+    let todos: [VideoCalendarTodo]
     let dragScope: UUID
     let openVideo: (VideoGroup) -> Void
+    let openTodo: (String) -> Void
     let generateBrandImage: (String) -> Void
     let addVideo: (Date) -> Void
     let resolveDestination: (String, Date) -> Date?
     let moveVideo: (String, Date) -> Date?
+    let moveTodo: (String, Date) -> Date?
 
     @ScaledMetric(relativeTo: .caption2) private var cellHeight = 80.0
+    @ScaledMetric(relativeTo: .caption2) private var todoHeight = 48.0
+    @State private var expandedDays: Set<Date> = []
     private let weekdays = ["一", "二", "三", "四", "五", "六", "日"]
     private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 0), count: 7)
 
     var body: some View {
         let days = VideoCalendarMonth(containing: month, calendar: qddCalendar).days
+        let todoCounts = Dictionary(grouping: todos, by: \.date).mapValues(\.count)
+        let weekHeights = VideoCalendarContentLayout.weekHeights(
+            days: days, videoDays: Set(groups.compactMap(\.monthDate).map(dayOnly)),
+            todoCounts: todoCounts, expandedDays: expandedDays,
+            minimumHeight: cellHeight, todoHeight: todoHeight
+        )
 
         VStack(spacing: 0) {
             LazyVGrid(columns: columns, spacing: 0) {
@@ -86,15 +97,29 @@ struct VideoMonthCalendar: View {
             VideoCalendarCollectionView(
                 days: days,
                 groups: groups,
+                todos: todos,
                 dragScope: dragScope,
-                rowHeight: cellHeight,
+                weekHeights: weekHeights,
+                todoHeight: todoHeight,
+                expandedDays: expandedDays,
                 openVideo: openVideo,
+                openTodo: openTodo,
+                toggleTodos: { day in
+                    if expandedDays.contains(day) { expandedDays.remove(day) }
+                    else { expandedDays.insert(day) }
+                },
                 generateBrandImage: generateBrandImage,
                 addVideo: addVideo,
                 resolveDestination: resolveDestination,
-                moveVideo: moveVideo
+                moveVideo: moveVideo,
+                moveTodo: { id, requestedDate in
+                    guard let savedDate = moveTodo(id, requestedDate) else { return nil }
+                    // A dropped task must stay visible even on an already busy day.
+                    expandedDays.insert(dayOnly(savedDate))
+                    return savedDate
+                }
             )
-            .frame(height: CGFloat(days.count / 7) * cellHeight)
+            .frame(height: weekHeights.reduce(0, +))
             .padding(.horizontal, 6)
             .padding(.bottom, 6)
         }
@@ -102,8 +127,9 @@ struct VideoMonthCalendar: View {
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(AppTheme.readablePrimary.opacity(colorScheme == .dark ? 0.24 : 0.12), lineWidth: 1 / displayScale)
+                .stroke(AppTheme.readablePrimary.opacity(colorScheme == .dark ? 0.24 : 0), lineWidth: 1 / displayScale)
         }
+        .onChange(of: month) { _, _ in expandedDays = [] }
     }
 
     private var weekdayLabelColor: Color {

@@ -9,7 +9,10 @@ import SwiftUI
 import UIKit
 
 struct VideosPage: View {
+    @State private var saveError: NSError?
     @Environment(\.managedObjectContext) private var viewContext
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var calendarTodoStore = TodoStore()
 
     @FetchRequest(
         sortDescriptors: [
@@ -31,6 +34,7 @@ struct VideosPage: View {
     @AppStorage("videoViewMode") private var viewMode: VideoViewMode = .list
     @State private var selectedCalendarDay = dayOnly(Date())
     @State private var selectedCalendarGroup: VideoGroup?
+    @State private var selectedCalendarTodo: TodoItem?
     @State private var calendarDragScope = UUID()
     @State private var calendarError: String?
     @State private var generatedCalendarBrandListDraft: GeneratedBrandListDraft?
@@ -110,6 +114,18 @@ struct VideosPage: View {
         viewMode == .calendar ? selectedCalendarDay : selectedMonth
     }
 
+    private var calendarTodos: [VideoCalendarTodo] {
+        calendarTodoStore.items.compactMap { item in
+            guard !item.isDeleted, item.completedAt == nil, let date = item.dueDate,
+                  qddCalendar.isDate(date, equalTo: selectedMonth, toGranularity: .month) else { return nil }
+            let searchableText = [item.title, item.notes, item.contentLink?.fallbackTitle].compactMap { $0 }.joined(separator: " ")
+            guard query.isEmpty || searchableText.localizedCaseInsensitiveContains(query) else { return nil }
+            return VideoCalendarTodo(id: item.objectID.uriRepresentation().absoluteString,
+                                     title: item.title.nonEmptyOr("未命名待办"), date: dayOnly(date),
+                                     canEdit: calendarTodoStore.canEdit(item))
+        }
+    }
+
     var body: some View {
         NavigationStack {
             List {
@@ -127,15 +143,18 @@ struct VideosPage: View {
                         VideoMonthCalendar(
                             month: selectedMonth,
                             groups: calendarGroups,
+                            todos: calendarTodos,
                             dragScope: calendarDragScope,
                             openVideo: { selectedCalendarGroup = $0 },
+                            openTodo: openCalendarTodo,
                             generateBrandImage: { generatedCalendarBrandListDraft = GeneratedBrandListDraft(text: $0) },
                             addVideo: { date in
                                 selectedCalendarDay = date
                                 showingNewVideo = true
                             },
                             resolveDestination: calendarDropDestination,
-                            moveVideo: moveCalendarVideo
+                            moveVideo: moveCalendarVideo,
+                            moveTodo: moveCalendarTodo
                         )
                         .wideListRow(top: 8, bottom: 8)
                     } else if !scheduledGroups.isEmpty {
@@ -149,9 +168,15 @@ struct VideosPage: View {
                     }
                 } header: {
                     HStack {
-                        Text("已选发布时间")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(Color(uiColor: .secondaryLabel))
+                        HStack(spacing: 6) {
+                            Text(viewMode == .calendar ? "视频与待办" : "已选发布时间")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(Color(uiColor: .secondaryLabel))
+                            Text("\(viewMode == .calendar ? calendarGroups.count : scheduledGroups.count)")
+                                .font(.headline.weight(.semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                        }
                         Spacer(minLength: 12)
                         VideoViewModeToggle(viewMode: $viewMode)
                     }
@@ -162,16 +187,19 @@ struct VideosPage: View {
                     videoSection(title: "已发布视频", groups: publishedGroups, delete: deletePublishedVideoGroups)
                 }
             }
+            .cloudSyncRefreshable()
             .navigationTitle("视频")
+            .saveFailureAlert($saveError)
             .listStyle(.insetGrouped)
+            .contentMargins(.horizontal, AppLayout.homeListContentMargin, for: .scrollContent)
             .listSectionSpacing(.compact)
             .softPageBackground()
-            .searchable(text: $searchText, prompt: "搜索本月品牌、微信、视频")
+            .searchable(text: $searchText, prompt: viewMode == .calendar ? "搜索本月视频、品牌、待办" : "搜索本月品牌、微信、视频")
             .navigationDestination(item: $selectedCalendarGroup) { group in
                 VideoDetailView(group: group)
                     .environment(\.managedObjectContext, viewContext)
             }
-            .alert("无法调整排期", isPresented: Binding(
+            .alert("日历操作未完成", isPresented: Binding(
                 get: { calendarError != nil },
                 set: { if !$0 { calendarError = nil } }
             )) {
@@ -195,6 +223,8 @@ struct VideosPage: View {
                     } label: {
                         Label("新视频", systemImage: "plus")
                     }
+                    .foregroundStyle(.primary)
+                    .tint(Color.primary)
                 }
             }
             .sheet(isPresented: $showingNewVideo) {
@@ -205,6 +235,9 @@ struct VideosPage: View {
             }
             .sheet(item: $generatedCalendarBrandListDraft) { draft in
                 BrandListImagePreview(initialText: draft.text)
+            }
+            .sheet(item: $selectedCalendarTodo) { item in
+                TodoDetailsEditor(item: item, store: calendarTodoStore)
             }
             .sheet(item: $editingLikesGroup) { group in
                 if let publishedDate = group.records.compactMap(\.publishedDate).first {
@@ -222,6 +255,41 @@ struct VideosPage: View {
             .onReceive(NotificationCenter.default.publisher(for: .adRecordsDidChange)) { _ in
                 refreshToken = UUID()
             }
+            .onChange(of: viewMode) { _, mode in
+                if mode == .calendar { refreshCalendarTodos() }
+            }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active && viewMode == .calendar { refreshCalendarTodos() }
+            }
+            .onAppear {
+                if viewMode == .calendar { refreshCalendarTodos() }
+            }
+        }
+    }
+
+    private func refreshCalendarTodos() {
+        do { try calendarTodoStore.refresh() }
+        catch { calendarError = "待办未能载入，请稍后重试。\(error.localizedDescription)" }
+    }
+
+    private func openCalendarTodo(_ id: String) {
+        guard let item = calendarTodoStore.items.first(where: { $0.objectID.uriRepresentation().absoluteString == id }),
+              !item.isDeleted else {
+            calendarError = "这条待办已被删除或不在当前数据空间，请刷新后重试。"
+            return
+        }
+        selectedCalendarTodo = item
+    }
+
+    private func moveCalendarTodo(_ id: String, to destination: Date) -> Date? {
+        do {
+            guard let item = calendarTodoStore.items.first(where: { $0.objectID.uriRepresentation().absoluteString == id }) else {
+                throw TodoStore.StoreError.unavailable
+            }
+            return try calendarTodoStore.reschedule(item, to: destination)
+        } catch {
+            calendarError = "待办日期未保存。\(error.localizedDescription)"
+            return nil
         }
     }
 
@@ -230,10 +298,17 @@ struct VideosPage: View {
         Section {
             videoRows(groups: groups, delete: delete)
         } header: {
-            Text(title)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(Color(uiColor: .secondaryLabel))
-                .textCase(nil)
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(Color(uiColor: .secondaryLabel))
+                Text("\(groups.count)")
+                    .font(.headline.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(Color(uiColor: .tertiaryLabel))
+                Spacer(minLength: 0)
+            }
+            .textCase(nil)
         }
     }
 
@@ -264,6 +339,7 @@ struct VideosPage: View {
                 } label: {
                     Label("删除", systemImage: "trash")
                 }
+                .tint(AppTheme.danger)
             }
         }
         .onDelete(perform: delete)
@@ -429,14 +505,12 @@ struct VideosPage: View {
     }
 
     private func saveContext() {
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
     }
 }
 
@@ -551,12 +625,12 @@ struct VideoDetailView: View {
                         .foregroundStyle(.secondary)
 
                     HStack(spacing: 10) {
-                        VideoMetricTile(title: "内容", value: "\(records.count) 条", tint: AppTheme.primary)
+                        VideoMetricTile(title: "内容", value: "\(records.count) 条", tint: AppTheme.readablePrimary)
                         VideoMetricTile(title: "合计", value: moneyText(totalAmount), tint: .primary)
                         VideoMetricTile(
                             title: isPublished ? "待结" : "状态",
                             value: isPublished ? moneyText(unpaidAmount) : "未发布",
-                            tint: isPublished && unpaidAmount == 0 ? .green : .red
+                            tint: isPublished && unpaidAmount == 0 ? AppTheme.success : AppTheme.danger
                         )
                     }
                 }
@@ -619,6 +693,7 @@ struct VideoDetailView: View {
                         } label: {
                             Label("移出", systemImage: "tray.and.arrow.down")
                         }
+                        .tint(AppTheme.danger)
                     }
                 }
                 .onMove(perform: moveRecords)
@@ -653,6 +728,8 @@ struct VideoDetailView: View {
                 } label: {
                     Label("添加", systemImage: "plus")
                 }
+                .foregroundStyle(.primary)
+                .tint(Color.primary)
             }
         }
         .sheet(isPresented: $showingAddSheet) {
@@ -732,15 +809,30 @@ struct VideoDetailView: View {
 
     private func setPublished(_ published: Bool) {
         guard published != isPublished else { return }
-        let previousValues = records.map { record in
+        let videoRecords = records
+        let previousVideoDate = videoDate
+        let publicationMoment = Date()
+        let publicationDay = dayOnly(publicationMoment)
+        let snapshots = (try? fetchVideoLikeSnapshots(
+            videoName: videoName,
+            videoDate: videoDate,
+            in: viewContext
+        )) ?? []
+        let previousValues = videoRecords.map { record in
             (record, record.dictionaryWithValues(forKeys: [
-                "dueDate", "updatedAt", "commentReminderID", "brandCommentedAt",
+                "publishDate", "dueDate", "updatedAt", "commentReminderID", "brandCommentedAt",
                 "paymentStatus", "paidDate", "paymentAccount", "paidAmount"
             ]))
         }
-        let newDate: Date? = published ? Date() : nil
+        let previousSnapshotValues = snapshots.map { snapshot in
+            (snapshot, snapshot.dictionaryWithValues(forKeys: ["videoDate", "updatedAt"]))
+        }
+        let newDate: Date? = published ? publicationMoment : nil
         let publicationID: String? = published ? UUID().uuidString : nil
-        records.forEach { record in
+        videoRecords.forEach { record in
+            if published {
+                record.publishDate = publicationDay
+            }
             record.publishedDate = newDate
             record.commentReminderID = publicationID
             record.brandCommentedAt = nil
@@ -752,8 +844,17 @@ struct VideoDetailView: View {
                 record.paidAmount = 0
             }
         }
+        if published {
+            snapshots.forEach { snapshot in
+                snapshot.videoDate = publicationDay
+                snapshot.updatedAt = publicationMoment
+            }
+            videoDate = publicationDay
+        }
         guard saveContext() else {
             previousValues.forEach { $0.0.setValuesForKeys($0.1) }
+            previousSnapshotValues.forEach { $0.0.setValuesForKeys($0.1) }
+            videoDate = previousVideoDate
             syncPublishedState()
             return
         }
@@ -1024,7 +1125,7 @@ struct VideoLikeDataEditor: View {
                         if let errorMessage {
                             Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                                 .font(.caption)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(AppTheme.danger)
                         }
                     }
                     .padding(.horizontal, 18)
@@ -1065,6 +1166,7 @@ struct VideoLikeDataEditor: View {
                             } label: {
                                 Label("删除", systemImage: "trash")
                             }
+                            .tint(AppTheme.danger)
 
                             Button {
                                 editingSnapshot = snapshot
@@ -1127,29 +1229,26 @@ struct VideoLikeDataEditor: View {
         snapshot.createdAt = Date()
         snapshot.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            PersistenceController.shared.shareOwnedVideoLikeSnapshotIfNeeded(snapshot)
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
+        // Roll back on failure: otherwise the new snapshot stays in the context and a retry adds a duplicate.
+        if viewContext.saveRollingBackOnFailure("保存视频点赞量") != nil {
             errorMessage = "保存失败，请稍后重试"
-            AppLogger.shared.log("保存视频点赞量失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        PersistenceController.shared.shareOwnedVideoLikeSnapshotIfNeeded(snapshot)
+        notifyRecordsChanged()
+        dismiss()
     }
 
     private func deleteSnapshot(_ snapshot: VideoLikeSnapshot) {
         viewContext.delete(snapshot)
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-            loadLatestCount()
-        } catch {
+        if viewContext.saveRollingBackOnFailure("删除视频点赞量") != nil {
             errorMessage = "删除失败，请稍后重试"
-            AppLogger.shared.log("删除视频点赞量失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        loadLatestCount()
     }
 }
 
@@ -1269,7 +1368,7 @@ struct VideoLikeEditorView: View {
                     if let errorMessage {
                         Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(AppTheme.danger)
                     }
                 }
                 .padding(.horizontal, 20)
@@ -1327,18 +1426,17 @@ struct VideoLikeEditorView: View {
         target.likeCount = parsedCount
         target.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            if isNewSnapshot {
-                PersistenceController.shared.shareOwnedVideoLikeSnapshotIfNeeded(target)
-            }
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
+        // `target` is created here for a new entry, so without a rollback every retry would add another snapshot.
+        if viewContext.saveRollingBackOnFailure("保存视频点赞量") != nil {
             errorMessage = "保存失败，请稍后重试"
-            AppLogger.shared.log("保存视频点赞量失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        if isNewSnapshot {
+            PersistenceController.shared.shareOwnedVideoLikeSnapshotIfNeeded(target)
+        }
+        notifyRecordsChanged()
+        dismiss()
     }
 }
 
@@ -1406,6 +1504,7 @@ func videoPublishedElapsedText(from publishedDate: Date, to recordedAt: Date) ->
 }
 
 struct NewVideoView: View {
+    @State private var saveError: NSError?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -1418,6 +1517,7 @@ struct NewVideoView: View {
     private var allRecords: FetchedResults<AdRecord>
 
     @State private var videoName = ""
+    @FocusState private var isVideoNameFocused: Bool
     @State private var showingDateConflict = false
     @State private var hasVideoDate = false
     @State private var videoDate = Date()
@@ -1462,6 +1562,9 @@ struct NewVideoView: View {
                 VStack(spacing: 0) {
                     EditorCardRow {
                         TextField("视频名称/期数", text: $videoName)
+                            .focused($isVideoNameFocused)
+                            .submitLabel(.done)
+                            .onSubmit { isVideoNameFocused = false }
                     }
                     EditorCardRow {
                         Toggle("设置发布时间", isOn: $hasVideoDate)
@@ -1501,6 +1604,7 @@ struct NewVideoView: View {
             )
         }
         .navigationTitle("新视频")
+        .saveFailureAlert($saveError)
         .alert("这一天已有视频", isPresented: $showingDateConflict) {
             Button("好的", role: .cancel) { }
         } message: {
@@ -1542,21 +1646,20 @@ struct NewVideoView: View {
     }
 
     private func saveAndDismiss() {
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            dismiss()
-            DispatchQueue.main.async {
-                notifyRecordsChanged()
-            }
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
+        }
+        viewContext.processPendingChanges()
+        dismiss()
+        DispatchQueue.main.async {
+            notifyRecordsChanged()
         }
     }
 }
 
 struct AddPoolItemsView: View {
+    @State private var saveError: NSError?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -1623,6 +1726,7 @@ struct AddPoolItemsView: View {
             )
         }
         .navigationTitle("添加到视频")
+        .saveFailureAlert($saveError)
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
         .searchable(text: $searchText, prompt: "搜索品牌、微信")
@@ -1650,15 +1754,13 @@ struct AddPoolItemsView: View {
         let firstNewOrder = nextVideoItemOrder(name: videoName, date: videoDate, in: viewContext)
         prepareRecordsForVideo(selectedRecords, name: videoName, date: videoDate, publication: publication)
         assignVideoOrder(to: selectedRecords, startingAt: firstNewOrder)
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        dismiss()
     }
 }
 
@@ -1672,6 +1774,7 @@ struct VideoInfoEditorView: View {
     @State private var showingDateConflict = false
 
     @State private var videoName: String
+    @FocusState private var isVideoNameFocused: Bool
     @State private var hasVideoDate: Bool
     @State private var videoDate: Date
 
@@ -1691,6 +1794,9 @@ struct VideoInfoEditorView: View {
                 EditorCardRow {
                     TextField("视频名称/期数", text: $videoName)
                         .textInputAutocapitalization(.never)
+                        .focused($isVideoNameFocused)
+                        .submitLabel(.done)
+                        .onSubmit { isVideoNameFocused = false }
                 }
                 EditorCardRow(showsDivider: false) {
                     Toggle("设置发布时间", isOn: $hasVideoDate)
@@ -2041,17 +2147,17 @@ private struct BrandListImagePreview: View {
                 }
                 Text(saveState.buttonTitle)
             }
-            .font(.headline)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 4)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(AppTheme.onPrimary)
+            .padding(.horizontal, 18)
+            .frame(minHeight: 44)
+            .background(saveState == .saved ? AppTheme.success : AppTheme.primary, in: Capsule())
         }
-        .buttonStyle(.borderedProminent)
-        .tint(saveState == .saved ? .green : AppTheme.primary)
-        .controlSize(.large)
+        .buttonStyle(.plain)
         .disabled(saveState != .idle)
         .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
     }
 
     private func saveToPhotoLibrary() {
@@ -2177,7 +2283,7 @@ struct VideoFilterButton: View {
             Text(isUnshot ? "未拍摄" : "全部")
         }
         .font(.subheadline.weight(.semibold))
-        .foregroundStyle(isUnshot ? Color.orange : Color.primary)
+        .foregroundStyle(isUnshot ? AppTheme.warning : Color.primary)
         .frame(minWidth: 86, minHeight: 44)
         .fixedSize(horizontal: true, vertical: false)
         .contentShape(Rectangle())
@@ -2204,7 +2310,7 @@ struct VideoStatusPill: View {
     let isPublished: Bool
 
     private var tint: Color {
-        isPublished ? .green : .orange
+        isPublished ? AppTheme.success : AppTheme.warning
     }
 
     var body: some View {
@@ -2294,7 +2400,7 @@ struct PublishToggleRow: View {
     }
 
     private var statusTint: Color {
-        isPublished ? .green : .orange
+        isPublished ? AppTheme.success : AppTheme.warning
     }
 
     private var subtitle: String {

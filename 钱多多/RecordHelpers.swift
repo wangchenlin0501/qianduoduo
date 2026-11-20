@@ -406,8 +406,15 @@ func deleteVideoLikeSnapshots(
     }
 }
 
+/// Amounts always read the Chinese way: "¥8,700", "¥4,816.67". The device region is ignored on purpose.
+/// The rest of the UI is pinned to zh_CN, so a phone set to another region would otherwise print
+/// "8 700,00 CNY" or "4 816,67" next to Chinese labels on the same screen.
 func moneyText(_ amount: Double) -> String {
-    amount.formatted(.currency(code: "CNY").precision(.fractionLength(0...2)))
+    amount.formatted(
+        .currency(code: "CNY")
+            .precision(.fractionLength(0...2))
+            .locale(Locale(identifier: "zh_CN"))
+    )
 }
 
 func monthTitle(_ date: Date) -> String {
@@ -447,10 +454,10 @@ func ledgerDateTint(for date: Date) -> Color {
     let elapsedDays = calendar.dateComponents([.day], from: startDate, to: today).day ?? 0
 
     if elapsedDays > 20 {
-        return .red
+        return AppTheme.danger
     }
     if elapsedDays > 15 {
-        return .orange
+        return AppTheme.warning
     }
     return AppTheme.primary
 }

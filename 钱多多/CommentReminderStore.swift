@@ -32,4 +32,46 @@ enum CommentReminderStore {
         request.predicate = NSPredicate(format: "dueDate != nil")
         return try context.fetch(request)
     }
+
+    /// Reconciliation is a read-only snapshot of saved data. User edits stay in their own context.
+    static func savedEvents(in container: NSPersistentCloudKitContainer) async throws -> [CommentReminderEvent] {
+        let calendar = qddCalendar
+        let context = container.newBackgroundContext()
+        return try await context.perform {
+            context.name = "CommentReminderMetadataRead"
+            context.undoManager = nil
+            return try projectedEvents(in: context, calendar: calendar)
+        }
+    }
+
+    nonisolated static func projectedEvents(
+        in context: NSManagedObjectContext, calendar: Calendar
+    ) throws -> [CommentReminderEvent] {
+        let spaceID = NSExpressionDescription()
+        spaceID.name = "spaceID"
+        spaceID.expression = NSExpression(forKeyPath: "syncSpace.id")
+        spaceID.expressionResultType = .UUIDAttributeType
+        let request = NSFetchRequest<NSDictionary>(entityName: "AdRecord")
+        request.resultType = .dictionaryResultType
+        request.predicate = NSPredicate(format: "dueDate != nil")
+        request.propertiesToFetch = [
+            "commentReminderID", "videoTitle", "publishDate", "dueDate",
+            "updatedAt", "brandCommentedAt", spaceID
+        ]
+        request.includesPendingChanges = false
+        // Dictionary projections return metadata values, not batched managed-object faults.
+        // fetchBatchSize requires self/objectID and is ignored for this field-only projection.
+        let snapshots = try context.fetch(request).map { row in
+            CommentReminderRecordSnapshot(
+                reminderID: row["commentReminderID"] as? String,
+                spaceID: row["spaceID"] as? UUID,
+                videoName: row["videoTitle"] as? String,
+                videoDate: row["publishDate"] as? Date,
+                publishedAt: row["dueDate"] as? Date,
+                updatedAt: row["updatedAt"] as? Date,
+                completedAt: row["brandCommentedAt"] as? Date
+            )
+        }
+        return CommentReminderSnapshot.events(from: snapshots, calendar: calendar)
+    }
 }

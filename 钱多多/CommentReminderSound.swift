@@ -145,18 +145,18 @@ enum CommentReminderSound: String, CaseIterable, Identifiable {
 @MainActor
 private final class CommentReminderSoundPreview {
     static let shared = CommentReminderSoundPreview()
-    private var player: AVAudioPlayer?
+    private var player: CelebrationPlayback?
 
     func play(_ url: URL) {
-        do {
-            player?.stop()
-            // ambient 保留系统静音行为，不抢占其他应用的音频。
-            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default)
-            player = try AVAudioPlayer(contentsOf: url)
-            player?.prepareToPlay()
-            player?.play()
-        } catch {
-            AppLogger.shared.log("试听提醒声音失败：\(error.localizedDescription)")
+        player?.stop()
+        let nextPlayer = CelebrationPlayback()
+        player = nextPlayer
+        // ambient 保留系统静音行为；准备和播放也在音频后台队列执行。
+        nextPlayer.start(source: .file(url), category: .ambient) { result in
+            guard case .failure(let error) = result else { return }
+            Task { @MainActor in
+                AppLogger.shared.log("试听提醒声音失败：\(error.localizedDescription)")
+            }
         }
     }
 }

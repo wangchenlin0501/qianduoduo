@@ -49,21 +49,22 @@ final class VideoCommentNotificationManager: ObservableObject {
             UNNotificationCategory(identifier: Self.categoryID, actions: [complete], intentIdentifiers: [])
         ])
         for name in [Notification.Name.NSPersistentStoreRemoteChange, .NSManagedObjectContextDidSave, .adRecordsDidChange] {
-            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.requestReconciliation() }
             })
         }
         observers.append(NotificationCenter.default.addObserver(
-            forName: NSPersistentCloudKitContainer.eventChangedNotification, object: container, queue: .main
+            forName: NSPersistentCloudKitContainer.eventChangedNotification, object: container, queue: nil
         ) { [weak self] note in
             guard let event = note.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey] as? NSPersistentCloudKitContainer.Event,
-                  event.endDate != nil, event.succeeded else { return }
+                  event.type == .import, event.endDate != nil, event.succeeded else { return }
             Task { @MainActor [weak self] in self?.requestReconciliation() }
         })
         requestReconciliation()
     }
 
     func requestReconciliation() {
+        needsAnotherPass = true
         debounceTask?.cancel()
         debounceTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
@@ -73,11 +74,13 @@ final class VideoCommentNotificationManager: ObservableObject {
     }
 
     func reconcileNow() async {
-        needsAnotherPass = true
+        debounceTask?.cancel()
+        debounceTask = nil
         if let runningTask {
             await runningTask.value
             return
         }
+        needsAnotherPass = true
         let task = Task { [weak self] in
             guard let self else { return }
             let backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "同步评论提醒")
@@ -127,14 +130,16 @@ final class VideoCommentNotificationManager: ObservableObject {
     private func reconcilePass() async {
         let settings = await center.notificationSettings()
         let allowed = [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus)
+        let nextAuthorizationText: String
         switch settings.authorizationStatus {
-        case .authorized: authorizationText = "已允许"
-        case .provisional: authorizationText = "静默通知"
-        case .ephemeral: authorizationText = "临时允许"
-        case .notDetermined: authorizationText = "尚未开启"
-        case .denied: authorizationText = "未允许"
-        @unknown default: authorizationText = "无法确认"
+        case .authorized: nextAuthorizationText = "已允许"
+        case .provisional: nextAuthorizationText = "静默通知"
+        case .ephemeral: nextAuthorizationText = "临时允许"
+        case .notDetermined: nextAuthorizationText = "尚未开启"
+        case .denied: nextAuthorizationText = "未允许"
+        @unknown default: nextAuthorizationText = "无法确认"
         }
+        if authorizationText != nextAuthorizationText { authorizationText = nextAuthorizationText }
         var hints: [String] = []
         if !allowed { hints.append("请在这台设备上开启通知，随后会自动检查并补排提醒。") }
         else {
@@ -143,10 +148,11 @@ final class VideoCommentNotificationManager: ObservableObject {
             if settings.notificationCenterSetting != .enabled { hints.append("通知中心未开启") }
             if settings.scheduledDeliverySetting == .enabled { hints.append("系统已启用定时摘要，可能延后显示") }
         }
-        diagnosticText = hints.isEmpty ? "本机已开启提醒；其他设备需各自允许通知并及时同步。" : hints.joined(separator: "；")
-        guard let context = freshContext() else { return }
+        let nextDiagnosticText = hints.isEmpty ? "本机已开启提醒；其他设备需各自允许通知并及时同步。" : hints.joined(separator: "；")
+        if diagnosticText != nextDiagnosticText { diagnosticText = nextDiagnosticText }
+        guard let container, !container.persistentStoreCoordinator.persistentStores.isEmpty else { return }
         let events: [CommentReminderEvent]
-        do { events = CommentReminderStore.events(from: try CommentReminderStore.records(in: context)) }
+        do { events = try await CommentReminderStore.savedEvents(in: container) }
         catch {
             lastError = "读取提醒失败：\(error.localizedDescription)"
             return // Never clear valid requests when the store could not be read.
@@ -224,7 +230,7 @@ final class VideoCommentNotificationManager: ObservableObject {
                 UserDefaults.standard.set(scheduledDates, forKey: ledgerKey)
                 queued += 1
                 nextStatuses[event.id] = "本机将于 \(timeText(targetDate)) 提醒"
-                AppLogger.shared.log("评论提醒已安排：\(timeText(targetDate))")
+                AppLogger.shared.log("评论提醒已安排：\(event.videoName)，\(timeText(targetDate))")
             } catch {
                 passError = "“\(event.videoName)”提醒安排失败：\(error.localizedDescription)"
                 nextStatuses[event.id] = "提醒安排失败 · 点击重试"
@@ -233,13 +239,15 @@ final class VideoCommentNotificationManager: ObservableObject {
         }
         scheduledDates = scheduledDates.filter { $0.value > now.addingTimeInterval(-30 * 86_400).timeIntervalSince1970 }
         UserDefaults.standard.set(scheduledDates, forKey: ledgerKey)
-        pendingCount = (await center.pendingNotificationRequests()).filter { $0.identifier.hasPrefix("video-comment-") && $0.identifier != Self.testID }.count
-        statuses = nextStatuses
+        let nextPendingCount = (await center.pendingNotificationRequests()).filter { $0.identifier.hasPrefix("video-comment-") && $0.identifier != Self.testID }.count
+        if pendingCount != nextPendingCount { pendingCount = nextPendingCount }
+        if statuses != nextStatuses { statuses = nextStatuses }
         let activityInfos = events.filter { $0.completedAt == nil && now.timeIntervalSince($0.fireDate) < 3_600 }.map {
             CommentReminderActivityInfo(id: $0.id, videoName: $0.videoName, publishedAt: $0.publishedAt, fireDate: $0.fireDate)
         }
         await CommentReminderLiveActivityManager.shared.reconcile(reminders: activityInfos)
-        lastError = passError ?? CommentReminderLiveActivityManager.shared.lastError
+        let nextError = passError ?? CommentReminderLiveActivityManager.shared.lastError
+        if lastError != nextError { lastError = nextError }
         dueRefreshTask?.cancel()
         if let nextDate = events.filter({ $0.completedAt == nil }).map(\.fireDate).filter({ $0 > now }).min() {
             dueRefreshTask = Task { [weak self] in

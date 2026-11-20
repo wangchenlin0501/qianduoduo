@@ -223,6 +223,163 @@ struct BackupImportTests {
         }
     }
 
+    @Test func todoBackupRoundTripPreservesContentDatesCompletionAndOrder() throws {
+        let source = PersistenceController(inMemory: true)
+        let context = source.container.viewContext
+        let instant = Date(timeIntervalSinceReferenceDate: 810_456_789.123456)
+        let completed = TodoItem(context: context)
+        completed.id = UUID()
+        completed.title = "开票\n核对金额"
+        completed.notes = "保留空格  和备注\n下一行"
+        completed.createdAt = instant
+        completed.updatedAt = instant.addingTimeInterval(0.125)
+        completed.completedAt = instant.addingTimeInterval(0.25)
+        completed.dueDate = instant.addingTimeInterval(0.5)
+        completed.sortOrder = 42.75
+        let pending = TodoItem(context: context)
+        pending.id = UUID()
+        pending.title = "待处理事项"
+        pending.sortOrder = -3.5
+        try context.save()
+
+        let exported = try #require(exportRecords(context: context))
+        let decoder = JSONDecoder()
+        let bundle = try decoder.decode(ExportDataBundle.self, from: exported)
+        #expect(bundle.formatVersion == 4)
+        #expect(bundle.todoItems?.count == 2)
+        #expect(bundle.todoItems?.first?.id == pending.id?.uuidString)
+
+        let destination = PersistenceController(inMemory: true)
+        let destinationContext = destination.container.viewContext
+        let summary = try importRecords(data: exported, context: destinationContext, persistence: destination)
+        #expect(summary.importedCount == 2)
+        #expect(summary.skippedCount == 0)
+        let restored = try destinationContext.fetch(TodoItem.fetchRequest())
+        for original in [completed, pending] {
+            let copy = try #require(restored.first { $0.id == original.id })
+            for key in original.entity.attributesByName.keys {
+                #expect(copy.value(forKey: key) as? NSObject == original.value(forKey: key) as? NSObject,
+                        "Restored todo attribute differs: \(key)")
+            }
+            #expect(copy.syncSpace != nil)
+            #expect(copy.objectID.persistentStore == copy.syncSpace?.objectID.persistentStore)
+        }
+        #expect(exportRecords(context: destinationContext) == exported)
+    }
+
+    @Test func duplicateTodoIDsDoNotOverwriteLocalEditsOrCompletion() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let id = UUID()
+        let newID = UUID()
+        let firstData = try todoBackup(items: [todo(id)])
+        _ = try importRecords(data: firstData, context: context, persistence: persistence)
+        let item = try #require(context.fetch(TodoItem.fetchRequest()).first)
+        let completedAt = Date(timeIntervalSinceReferenceDate: 810_000_000.125)
+        item.title = "本机修改后的标题"
+        item.notes = "本机备注"
+        item.completedAt = completedAt
+        item.sortOrder = 19.25
+        try context.save()
+        var duplicate = todo(id)
+        duplicate["id"] = id.uuidString.lowercased()
+        let data = try todoBackup(items: [duplicate, todo(newID), todo(newID)])
+        let summary = try importRecords(data: data, context: context, persistence: persistence)
+        #expect(summary.importedCount == 1)
+        #expect(summary.skippedCount == 2)
+        #expect(try context.fetch(TodoItem.fetchRequest()).count == 2)
+        #expect(item.title == "本机修改后的标题")
+        #expect(item.notes == "本机备注")
+        #expect(item.completedAt == completedAt)
+        #expect(item.sortOrder == 19.25)
+
+        let repeated = try importRecords(data: data, context: context, persistence: persistence)
+        #expect(repeated.importedCount == 0)
+        #expect(repeated.skippedCount == 3)
+    }
+
+    @Test func invalidTodoIDRejectsMixedBackupBeforeInsertingAnything() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        var invalid = todo(UUID())
+        invalid["id"] = "invalid-todo-id"
+        let data = try JSONSerialization.data(withJSONObject: [
+            "formatVersion": 3,
+            "records": [record(UUID())],
+            "followerSnapshots": [],
+            "todoItems": [todo(UUID()), invalid]
+        ] as [String: Any])
+        do {
+            _ = try importRecords(data: data, context: context, persistence: persistence)
+            Issue.record("An invalid todo ID must reject the complete backup")
+        } catch {
+            #expect(try context.fetch(AdRecord.fetchRequest()).isEmpty)
+            #expect(try context.fetch(TodoItem.fetchRequest()).isEmpty)
+            #expect(try context.fetch(SyncSpace.fetchRequest()).isEmpty)
+        }
+    }
+
+    @Test func versionTwoBackupWithoutTodosStillImportsWithoutTouchingTodos() throws {
+        let persistence = PersistenceController(inMemory: true)
+        let context = persistence.container.viewContext
+        let todo = TodoItem(context: context)
+        todo.id = UUID()
+        todo.title = "保留已有待办"
+        try context.save()
+        var legacyRecord = record(UUID())
+        legacyRecord["createdAt"] = 810_000_000.125
+        let data = try JSONSerialization.data(withJSONObject: [
+            "formatVersion": 2, "records": [legacyRecord], "followerSnapshots": []
+        ] as [String: Any])
+        let summary = try importRecords(data: data, context: context, persistence: persistence)
+        #expect(summary.importedCount == 1)
+        #expect(try context.fetch(TodoItem.fetchRequest()).count == 1)
+        #expect(todo.title == "保留已有待办")
+        let restored = try #require(context.fetch(AdRecord.fetchRequest()).first)
+        #expect(restored.createdAt == Date(timeIntervalSinceReferenceDate: 810_000_000.125))
+    }
+
+    @Test func contentAssociationSurvivesBackupAndOlderTodoBackupsRemainCompatible() throws {
+        let source = PersistenceController(inMemory: true)
+        let context = source.container.viewContext
+        let space = try source.activeSyncSpace(in: context)
+        let record = AdRecord(context: context)
+        record.id = UUID()
+        record.brandName = "关联品牌"
+        record.syncSpace = space
+        let todo = TodoItem(context: context)
+        todo.id = UUID()
+        todo.title = "跟进寄样"
+        todo.syncSpace = space
+        let link = TodoContentLink(kind: .pool, recordIDs: [try #require(record.id)], fallbackTitle: "关联品牌")
+        todo.linkedContent = link.encodedValue
+        try context.save()
+        let exported = try #require(exportRecords(context: context))
+        let destination = PersistenceController(inMemory: true)
+        let restoredContext = destination.container.viewContext
+        let summary = try importRecords(data: exported, context: restoredContext, persistence: destination)
+        #expect(summary.importedCount == 2)
+        let restoredTodo = try #require(restoredContext.fetch(TodoItem.fetchRequest()).first)
+        let restoredRecords = try restoredContext.fetch(AdRecord.fetchRequest())
+        #expect(restoredTodo.contentLink == link)
+        #expect(link.resolvedRecords(in: restoredRecords).first?.id == record.id)
+        #expect(restoredRecords.first?.syncSpace == restoredTodo.syncSpace)
+        let oldSummary = try importRecords(data: todoBackup(items: [self.todo(UUID())]),
+                                           context: restoredContext, persistence: destination)
+        #expect(oldSummary.importedCount == 1)
+        #expect(try restoredContext.fetch(TodoItem.fetchRequest()).filter { $0.linkedContent == nil }.count == 1)
+    }
+
+    private func todo(_ id: UUID) -> [String: Any] {
+        ["id": id.uuidString, "title": "测试待办", "notes": "测试备注", "sortOrder": 1.25]
+    }
+
+    private func todoBackup(items: [[String: Any]]) throws -> Data {
+        try JSONSerialization.data(withJSONObject: [
+            "formatVersion": 3, "records": [], "followerSnapshots": [], "todoItems": items
+        ] as [String: Any])
+    }
+
     private func record(_ id: UUID) -> [String: Any] {
         ["id": id.uuidString, "brandName": "测试品牌", "adFee": 123.45,
          "lookNumber": 1, "paidAmount": 0]

@@ -2,6 +2,7 @@
 //  QianDuoDuoApp.swift
 //  钱多多
 //
+//  Created by Mashiro on 2026/5/7.
 //
 
 import CloudKit
@@ -31,7 +32,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
         UNUserNotificationCenter.current().delegate = self
-        VideoCommentNotificationManager.shared.configure(container: PersistenceController.shared.container)
+        let persistence = PersistenceController.shared
+        // Reconciling reminders against a missing or half-opened store would cancel valid notifications.
+        if persistence.loadState.isReady {
+            VideoCommentNotificationManager.shared.configure(container: persistence.container)
+        } else {
+            AppLogger.shared.log("数据库未就绪，本次启动不同步评论提醒")
+        }
         return true
     }
 
@@ -79,14 +86,22 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 struct QianDuoDuoApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    let persistenceController = PersistenceController.shared
+    @ObservedObject private var persistenceController = PersistenceController.shared
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environment(\.managedObjectContext, persistenceController.container.viewContext)
-                .environment(\.calendar, qddCalendar)
-                .environment(\.timeZone, qddTimeZone)
+            // Data screens fetch and save immediately, so they appear only once every store is open.
+            switch persistenceController.loadState {
+            case .ready:
+                ContentView()
+                    .environment(\.managedObjectContext, persistenceController.container.viewContext)
+                    .environment(\.calendar, qddCalendar)
+                    .environment(\.timeZone, qddTimeZone)
+            case .loading:
+                StoreLoadingView()
+            case .failed(let error):
+                StoreUnavailableView(details: PersistenceController.describe(error))
+            }
         }
     }
 }

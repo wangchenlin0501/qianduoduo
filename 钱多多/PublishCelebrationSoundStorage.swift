@@ -1,6 +1,6 @@
 import Foundation
 
-/// 用户的庆祝录音只保存在本机，不进入 iCloud 同步或设备备份。
+/// 兼容旧版的本机录音；确认同步后由 SyncSpace 保存，临时文件不进入设备备份。
 struct PublishCelebrationSoundStorage {
     let directory: URL
 

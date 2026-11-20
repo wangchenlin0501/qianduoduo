@@ -22,28 +22,20 @@ struct CommentReminderSettingsSection: View {
 
     var body: some View {
         SettingsCardSection(
-            "评论提醒",
-            footer: "各设备需单独开启通知，声音和倒计时仅影响本机。离线或同步延迟可能影响提醒。"
+            "评论提醒"
         ) {
-            HStack(spacing: 12) {
-                Label("本机通知", systemImage: "bell.badge")
-                Spacer(minLength: 8)
+            SettingsValueRow("本机通知", systemImage: "bell.badge") {
                 Text(reminders.authorizationText)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
             }
-            .settingsRow()
 
             SettingsRowDivider()
 
-            HStack(spacing: 12) {
-                Label("待提醒", systemImage: "clock")
-                Spacer(minLength: 8)
+            SettingsValueRow("待提醒", systemImage: "clock") {
                 Text("\(reminders.pendingCount) 条")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
-            .settingsRow()
 
             if authorizationStatus == .notDetermined {
                 SettingsRowDivider()
@@ -67,9 +59,7 @@ struct CommentReminderSettingsSection: View {
 
             SettingsRowDivider()
 
-            HStack(spacing: 12) {
-                Label("提示音", systemImage: "speaker.wave.2")
-                Spacer(minLength: 8)
+            SettingsValueRow("提示音", systemImage: "speaker.wave.2") {
                 Picker("提示音", selection: $soundValue) {
                     ForEach(CommentReminderSound.allCases) { sound in
                         Text(sound.title).tag(sound.rawValue)
@@ -79,7 +69,6 @@ struct CommentReminderSettingsSection: View {
                 .pickerStyle(.menu)
                 .tint(.secondary)
             }
-            .settingsRow()
 
             SettingsRowDivider()
 
@@ -129,7 +118,7 @@ struct CommentReminderSettingsSection: View {
                 SettingsRowDivider()
                 Text(error)
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(AppTheme.warning)
                     .settingsRow()
             }
         }
@@ -178,7 +167,7 @@ struct CommentReminderSettingsSection: View {
                 switch result {
                 case .scheduled:
                     testAlertTitle = "测试通知已安排"
-                    testAlertMessage = "约 3 秒后发送到这台设备，并使用当前提示音。测试只验证本机通知，不代表其他设备已安排视频提醒；声音仍受系统静音和通知设置影响。"
+                    testAlertMessage = "约 3 秒后发送到本机。声音受静音和通知设置影响。"
                 case .permissionDenied:
                     testAlertTitle = "通知未开启"
                     testAlertMessage = "请在系统通知设置中允许钱多多发送通知，并开启声音、横幅和通知中心。"

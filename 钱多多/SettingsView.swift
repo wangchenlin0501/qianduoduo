@@ -14,8 +14,8 @@ import UniformTypeIdentifiers
 struct SettingsPage: View {
     @Environment(\.managedObjectContext) private var viewContext
 
-    @State private var showingExportShare = false
-    @State private var exportFileURL: URL?
+    @State private var route: SettingsRoute?
+    @State private var exportPresentation: ExportPresentation?
     @State private var showingImportPicker = false
     @State private var showingImportAlert = false
     @State private var importResultMessage = ""
@@ -26,25 +26,65 @@ struct SettingsPage: View {
     @State private var sharingRequestID: UUID?
     @State private var sharingTimeoutTask: Task<Void, Never>?
     @State private var isPreparingShare = false
+    @State private var sharingPopoverAnchor = CloudSharingPopoverAnchor()
     @State private var cloudAccountText = "检查中"
     @State private var showingSyncAlert = false
+    @State private var showingScreenshotCleanupConfirm = false
+    @State private var showingScreenshotCleanupResult = false
+    @State private var screenshotCleanupMessage = ""
+    @State private var saveError: NSError?
     @State private var syncAlertMessage = ""
     @AppStorage(demoDataHiddenKey) private var isDemoDataHidden = false
+    @ObservedObject private var syncService = CloudSyncRefreshService.shared
+
+    /// Pull-to-refresh used to swallow failures, so a failed upload looked identical to "all synced".
+    /// The latest manual or automatic result now stays visible here until the failing operation succeeds.
+    private var syncStatusText: String {
+        switch syncService.lastResult {
+        case nil: "本次启动暂无记录"
+        case .waiting?: "等待 iCloud"
+        case .receivedUpdates?: "下载检查完成"
+        case .failed?: "未完成"
+        }
+    }
+
+    private var syncStatusIsFailure: Bool {
+        if case .failed? = syncService.lastResult { return true }
+        return false
+    }
+
+    private var syncSectionFooter: String? {
+        guard case .failed(let message)? = syncService.lastResult else {
+            return nil
+        }
+        return "\(message)\n在同步成功之前，请先不要删除 App 或更换手机；本机数据不受影响。"
+    }
 
     var body: some View {
-        List {
-            SettingsCardSection(
+        let syncSection = SettingsCardSection(
                 "共享同步",
-                footer: "创建共享并通过 Apple ID 邀请成员。对方接受后，可共同管理池子、视频、账本和粉丝数据。"
+                footer: syncSectionFooter
             ) {
-                HStack(spacing: 12) {
-                    Label("iCloud 状态", systemImage: "icloud.fill")
-                    Spacer(minLength: 8)
+                SettingsValueRow("iCloud 状态", systemImage: "icloud.fill") {
                     Text(cloudAccountText)
-                        .foregroundStyle(cloudAccountText == "可用" ? .green : .secondary)
-                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(cloudAccountText == "可用" ? AppTheme.success : .secondary)
                 }
-                .settingsRow()
+
+                SettingsRowDivider()
+
+                SettingsValueRow("同步状态", systemImage: syncService.lastResult?.symbol ?? "icloud") {
+                    Text(syncStatusText)
+                        .foregroundStyle(syncStatusIsFailure ? AppTheme.warning : .secondary)
+                }
+
+                if let checkedAt = syncService.lastCheckedAt {
+                    SettingsRowDivider()
+
+                    SettingsValueRow("最近检查", systemImage: "clock") {
+                        Text(checkedAt, format: .dateTime.hour().minute())
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 SettingsRowDivider()
 
@@ -52,22 +92,24 @@ struct SettingsPage: View {
                     openCloudSharing()
                 } label: {
                     HStack(spacing: 12) {
-                        Label(isPreparingShare ? "正在准备共享" : "创建/管理共享", systemImage: "person.2.badge.gearshape.fill")
+                        Label(isPreparingShare ? "正在准备共享" : "创建或管理共享", systemImage: "person.2.badge.gearshape.fill")
                         Spacer(minLength: 8)
                         if isPreparingShare { ProgressView().controlSize(.small) }
                     }
                     .settingsRow()
                 }
-                .disabled(isPreparingShare)
+                .disabled(isPreparingShare || sharingPresentation != nil)
             }
 
-            ThemeColorSettingsSection()
+        let themeSection = ThemeColorSettingsSection()
 
-            SettingsCardSection("数据管理") {
+        let aiSection = AIAssistantSettingsSection()
+
+        let dataSection = SettingsCardSection("数据管理") {
                 Button {
                     exportData()
                 } label: {
-                    Label("导出数据", systemImage: "square.and.arrow.up")
+                    Label("导出备份", systemImage: "square.and.arrow.up")
                         .settingsRow()
                 }
 
@@ -76,18 +118,38 @@ struct SettingsPage: View {
                 Button {
                     showingImportPicker = true
                 } label: {
-                    Label("导入数据", systemImage: "square.and.arrow.down")
+                    Label("导入备份", systemImage: "square.and.arrow.down")
+                        .settingsRow()
+                }
+
+                SettingsRowDivider()
+
+                Button {
+                    exportLogs()
+                } label: {
+                    Label("导出诊断日志", systemImage: "doc.text")
                         .settingsRow()
                 }
             }
 
-            CommentReminderSettingsSection()
+        let cleanupSection = SettingsCardSection(
+                "截图清理"
+            ) {
+                Button(role: .destructive) {
+                    showingScreenshotCleanupConfirm = true
+                } label: {
+                    Label("删除超过三个月的截图", systemImage: "trash")
+                        .settingsRow()
+                }
+                .tint(AppTheme.danger)
+            }
 
-            PublishCelebrationSoundSettingsSection()
+        let reminderSection = CommentReminderSettingsSection()
 
-            SettingsCardSection(
-                "演示模式",
-                footer: "临时隐藏所有记录，用来给他人展示空白软件；数据不会删除，随时可以恢复显示。"
+        let soundSection = PublishCelebrationSoundSettingsSection()
+
+        let demoSection = SettingsCardSection(
+                "展示模式"
             ) {
                 Button {
                     if isDemoDataHidden {
@@ -97,70 +159,120 @@ struct SettingsPage: View {
                         showingDemoHideConfirm = true
                     }
                 } label: {
-                    Label(isDemoDataHidden ? "恢复显示所有数据" : "一键清空展示数据", systemImage: isDemoDataHidden ? "eye.fill" : "eye.slash.fill")
-                        .settingsRow()
-                }
-                .foregroundStyle(isDemoDataHidden ? AppTheme.readablePrimary : Color.red)
-            }
-
-            SettingsCardSection("日志") {
-                Button {
-                    exportLogs()
-                } label: {
-                    Label("导出日志", systemImage: "doc.text")
+                    Label(isDemoDataHidden ? "恢复显示记录" : "隐藏所有记录", systemImage: isDemoDataHidden ? "eye.fill" : "eye.slash.fill")
                         .settingsRow()
                 }
             }
 
-            SettingsCardSection("关于与隐私") {
+        let aboutSection = SettingsCardSection("关于与隐私") {
                 NavigationLink {
                     PrivacyPolicyView()
                 } label: {
-                    Label("隐私政策", systemImage: "hand.raised.fill")
-                        .settingsRow()
+                    HStack(spacing: 12) {
+                        Label("隐私政策", systemImage: "hand.raised.fill")
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .settingsRow()
                 }
 
                 if let supportURL = URL(string: "https://github.com/wangchenlin0501/qianduoduo/issues") {
                     SettingsRowDivider()
 
                     Link(destination: supportURL) {
-                        Label("帮助与反馈", systemImage: "questionmark.circle")
-                            .settingsRow()
+                        HStack(spacing: 12) {
+                            Label("帮助与反馈", systemImage: "questionmark.circle")
+                            Spacer(minLength: 8)
+                            Image(systemName: "arrow.up.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                                .accessibilityHidden(true)
+                        }
+                        .settingsRow()
                     }
                 }
 
                 SettingsRowDivider()
 
-                HStack(spacing: 12) {
-                    Label("版本", systemImage: "info.circle")
-                    Spacer(minLength: 8)
+                SettingsValueRow("版本", systemImage: "info.circle") {
                     Text(installedVersion)
                         .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
                 }
-                .settingsRow()
                 .accessibilityElement(children: .combine)
             }
+
+        List {
+            syncSection
+
+            SettingsCardSection("设置") {
+                settingsEntry(.appearance)
+                SettingsRowDivider()
+                settingsEntry(.ai)
+                SettingsRowDivider()
+                settingsEntry(.reminders)
+                SettingsRowDivider()
+                settingsEntry(.data)
+                SettingsRowDivider()
+                settingsEntry(.about)
+            }
+        }
+        .navigationDestination(item: $route) { route in
+            List {
+                switch route {
+                case .appearance:
+                    themeSection
+                case .ai:
+                    aiSection
+                case .reminders:
+                    reminderSection
+                    soundSection
+                case .data:
+                    dataSection
+                    cleanupSection
+                    demoSection
+                case .about:
+                    aboutSection
+                }
+            }
+            .navigationTitle(route.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .listStyle(.insetGrouped)
+            .listSectionSpacing(12)
+            .softPageBackground()
+            .tint(AppTheme.readablePrimary)
         }
         .navigationTitle("设置")
+        .saveFailureAlert($saveError)
+        .navigationBarTitleDisplayMode(.inline)
         .listStyle(.insetGrouped)
-        .listSectionSpacing(.compact)
+        .listSectionSpacing(12)
         .softPageBackground()
         .tint(AppTheme.readablePrimary)
+        .background {
+            // Keep the iPad source in the page hierarchy even when List rows scroll away.
+            CloudSharingPopoverSource(anchor: sharingPopoverAnchor)
+                .allowsHitTesting(false)
+        }
         .onAppear {
             refreshCloudAccountStatus()
         }
-        .sheet(isPresented: $showingExportShare) {
-            if let url = exportFileURL {
-                ShareSheet(activityItems: [url])
-            }
+        .sheet(item: $exportPresentation) { presentation in
+            ShareSheet(activityItems: [presentation.fileURL])
+                .id(presentation.id)
         }
-        .sheet(item: $sharingPresentation) { presentation in
+        .sheet(item: $sharingPresentation, onDismiss: {
+            AppLogger.shared.log("系统共享界面已关闭")
+        }) { presentation in
             CloudSharingView(
-                syncSpaceID: presentation.syncSpaceID,
                 share: presentation.share,
-                container: presentation.container
+                container: presentation.container,
+                popoverAnchor: sharingPopoverAnchor
             )
+            .id(presentation.id)
+            .onAppear { AppLogger.shared.log("系统共享界面已显示") }
         }
         .onDisappear { stopPreparingShare() }
         .fileImporter(isPresented: $showingImportPicker, allowedContentTypes: [.json]) { result in
@@ -181,15 +293,79 @@ struct SettingsPage: View {
         } message: {
             Text(exportErrorMessage)
         }
-        .alert("一键清空展示数据", isPresented: $showingDemoHideConfirm) {
-            Button("临时隐藏", role: .destructive) {
+        .alert("删除超过三个月的截图？", isPresented: $showingScreenshotCleanupConfirm) {
+            Button("删除截图", role: .destructive) {
+                deleteOldPublishedScreenshots()
+            }
+            Button("取消", role: .cancel) { }
+        } message: {
+            Text("只删除截图，记录和金额保留。删除会同步到你的其他设备和共享成员，无法撤回。")
+        }
+        .alert("截图清理完成", isPresented: $showingScreenshotCleanupResult) {
+            Button("好的") { }
+        } message: {
+            Text(screenshotCleanupMessage)
+        }
+        .alert("隐藏所有记录？", isPresented: $showingDemoHideConfirm) {
+            Button("隐藏记录") {
                 isDemoDataHidden = true
                 notifyRecordsChanged()
             }
             Button("取消", role: .cancel) { }
         } message: {
-            Text("这不会删除任何记录，只是让汇总、池子、视频和账本暂时显示为空。")
+            Text("各页面会暂时显示为空，可随时恢复。")
         }
+    }
+
+    private func settingsEntry(_ target: SettingsRoute) -> some View {
+        Button {
+            route = target
+        } label: {
+            HStack(spacing: 12) {
+                Label(target.title, systemImage: target.systemImage)
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+            .settingsRow()
+        }
+    }
+
+    private func deleteOldPublishedScreenshots() {
+        guard let cutoff = qddCalendar.date(byAdding: .month, value: -3, to: dayOnly(Date())) else { return }
+        let request = NSFetchRequest<AdRecord>(entityName: "AdRecord")
+        request.predicate = NSPredicate(format: "photoData != nil AND dueDate != nil AND dueDate < %@", cutoff as NSDate)
+        let records: [AdRecord]
+        do {
+            records = try viewContext.fetch(request).filter { record in
+                !(record.needsPayment && record.statusValue != .paid)
+            }
+        } catch {
+            AppLogger.shared.log("截图清理读取记录失败: \(PersistenceController.describe(error))")
+            screenshotCleanupMessage = "读取记录失败，请稍后重试。"
+            showingScreenshotCleanupResult = true
+            return
+        }
+        guard !records.isEmpty else {
+            screenshotCleanupMessage = "没有符合条件的截图。"
+            showingScreenshotCleanupResult = true
+            return
+        }
+        records.forEach { record in
+            record.photoData = nil
+            record.updatedAt = Date()
+        }
+        if let error = viewContext.saveRollingBackOnFailure("删除超过三个月的截图") {
+            saveError = error
+            return
+        }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        AppLogger.shared.log("手动删除了 \(records.count) 条记录的截图")
+        screenshotCleanupMessage = "已删除 \(records.count) 条记录的截图，记录和金额保留。"
+        showingScreenshotCleanupResult = true
     }
 
     private var installedVersion: String {
@@ -199,7 +375,7 @@ struct SettingsPage: View {
     }
 
     private func openCloudSharing() {
-        guard !isPreparingShare else { return }
+        guard !isPreparingShare, sharingPresentation == nil else { return }
         let requestID = UUID()
         sharingRequestID = requestID
         isPreparingShare = true
@@ -215,6 +391,8 @@ struct SettingsPage: View {
                 showingSyncAlert = true
             }
         }
+        // Configuration failures may complete synchronously and already clear this request.
+        guard sharingRequestID == requestID else { return }
         sharingTimeoutTask = Task { @MainActor in
             do {
                 try await Task.sleep(for: .seconds(30))
@@ -282,6 +460,8 @@ struct SettingsPage: View {
             "版本：\(version)（\(build)）",
             "系统：iOS \(UIDevice.current.systemVersion)",
             "导出时间：\(shortExportDate())",
+            "当前会话：\(AppLogger.shared.sessionDescription)",
+            "正文保留历史日志，请结合当前会话开始时间判断本次错误。",
             "",
             logs.isEmpty ? "暂无运行日志。" : logs.joined(separator: "\n")
         ].joined(separator: "\n")
@@ -292,8 +472,8 @@ struct SettingsPage: View {
         let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         do {
             try data.write(to: tempURL, options: .atomic)
-            exportFileURL = tempURL
-            showingExportShare = true
+            // Present from the prepared file itself so the first sheet never captures a nil URL.
+            exportPresentation = ExportPresentation(fileURL: tempURL)
         } catch {
             exportErrorMessage = "文件导出失败，请重试。\(error.localizedDescription)"
             showingExportAlert = true
@@ -313,7 +493,11 @@ struct SettingsPage: View {
             do {
                 let data = try Data(contentsOf: url)
                 let summary = try importRecords(data: data, context: viewContext)
+                AIBackup.restore(from: data, in: viewContext)
                 importResultMessage = summary.message
+            } catch BackupImportError.unsavedDataSpace {
+                // Not a damaged file: an editor still holds new content, so do not blame the backup.
+                importResultMessage = BackupImportError.unsavedDataSpace.localizedDescription
             } catch {
                 importResultMessage = "导入失败，请检查备份文件是否完整。\n\(error.localizedDescription)"
             }
@@ -332,6 +516,11 @@ struct SettingsPage: View {
     }
 }
 
+private struct ExportPresentation: Identifiable {
+    let id = UUID()
+    let fileURL: URL
+}
+
 struct ShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
 
@@ -342,48 +531,26 @@ struct ShareSheet: UIViewControllerRepresentable {
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
-struct CloudSharingView: UIViewControllerRepresentable {
-    let syncSpaceID: NSManagedObjectID
-    let share: CKShare
-    let container: CKContainer
+enum SettingsRoute: Hashable {
+    case appearance, ai, reminders, data, about
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(syncSpaceID: syncSpaceID)
+    var title: String {
+        switch self {
+        case .appearance: "外观"
+        case .ai: "AI 助手"
+        case .reminders: "提醒与音效"
+        case .data: "数据管理"
+        case .about: "关于与隐私"
+        }
     }
 
-    func makeUIViewController(context: Context) -> UICloudSharingController {
-        let controller = UICloudSharingController(share: share, container: container)
-        controller.delegate = context.coordinator
-        controller.availablePermissions = [.allowPrivate, .allowReadWrite]
-        return controller
-    }
-
-    func updateUIViewController(_ uiViewController: UICloudSharingController, context: Context) {}
-
-    final class Coordinator: NSObject, UICloudSharingControllerDelegate {
-        private let syncSpaceID: NSManagedObjectID
-
-        init(syncSpaceID: NSManagedObjectID) {
-            self.syncSpaceID = syncSpaceID
-        }
-
-        func cloudSharingController(_ csc: UICloudSharingController, failedToSaveShareWithError error: Error) {
-            AppLogger.shared.log("保存共享失败: \(PersistenceController.describe(error))")
-        }
-
-        func itemTitle(for csc: UICloudSharingController) -> String? {
-            "钱多多共享数据"
-        }
-
-        func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) {
-            if let share = csc.share {
-                PersistenceController.shared.persistUpdatedShare(share, for: syncSpaceID)
-            }
-            AppLogger.shared.log("共享邀请已保存")
-        }
-
-        func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) {
-            AppLogger.shared.log("已停止共享")
+    var systemImage: String {
+        switch self {
+        case .appearance: "paintpalette.fill"
+        case .ai: "sparkles"
+        case .reminders: "bell.fill"
+        case .data: "externaldrive.fill"
+        case .about: "hand.raised.fill"
         }
     }
 }

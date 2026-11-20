@@ -14,7 +14,14 @@ final class AppLogger: ObservableObject {
 
     @Published private(set) var logs: [String] = []
 
-    private let maxLogs = 80
+    let sessionID = String(UUID().uuidString.prefix(8))
+    let sessionStartedAt = Date()
+
+    var sessionDescription: String {
+        "\(sessionID)，开始于 \(dateFormatter.string(from: sessionStartedAt))"
+    }
+
+    private let maxLogs = 240
     private let logKey = "app_logs"
 
     private let dateFormatter: DateFormatter = {
@@ -31,6 +38,9 @@ final class AppLogger: ObservableObject {
         if logs.count != savedLogs.count {
             UserDefaults.standard.set(logs, forKey: logKey)
         }
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "未知"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
+        log("启动会话 \(sessionID)，版本 \(version)（\(build)）；此前日志为历史记录")
     }
 
     func log(_ message: String) {
@@ -46,60 +56,57 @@ final class AppLogger: ObservableObject {
 
 }
 
-// MARK: - Photo Cleanup (3 months)
+// MARK: - Background Photo Maintenance (compression only)
 
-func recompressLargePhotos(context: NSManagedObjectContext) {
-    let request: NSFetchRequest<AdRecord> = AdRecord.fetchRequest()
-    request.predicate = NSPredicate(format: "photoData != nil")
+/// Screenshots are compressed but never deleted automatically. The former age-based cleanup ran
+/// silently, synced the deletion to every device and share member, and also wiped screenshots of
+/// back-filled or imported older records. Any future removal needs an explicit, user-initiated flow.
+@MainActor
+final class PhotoMaintenanceService {
+    static let shared = PhotoMaintenanceService()
+    private var runningCoordinators: Set<ObjectIdentifier> = []
+    private var completedCoordinators: Set<ObjectIdentifier> = []
 
-    do {
-        let records = try context.fetch(request)
-        var changedRecords: [AdRecord] = []
-        for record in records {
-            guard
-                let photoData = record.photoData,
-                photoData.count > photoTargetByteCount,
-                let compressedData = normalizedPhotoData(photoData),
-                compressedData.count < photoData.count
-            else {
-                continue
+    func schedule(using context: NSManagedObjectContext) {
+        guard let coordinator = context.persistentStoreCoordinator else { return }
+        let key = ObjectIdentifier(coordinator)
+        guard !runningCoordinators.contains(key), !completedCoordinators.contains(key) else { return }
+        runningCoordinators.insert(key)
+
+        let startedAt = Date()
+        // Snapshot identities only. Never fault or decode image data on the UI context.
+        let editedIDs = Set(context.updatedObjects.union(context.insertedObjects)
+            .union(context.deletedObjects).map(\.objectID))
+        let byteLimit = photoTargetByteCount
+
+        Task(priority: .utility) {
+            defer { runningCoordinators.remove(key) }
+            do {
+                let summary = try await PhotoMaintenanceWorker.run(
+                    coordinator: coordinator, startedAt: startedAt,
+                    targetByteCount: byteLimit, excluding: editedIDs,
+                    compress: { MaintenancePhotoEncoder.normalizedData($0, targetByteCount: byteLimit) }
+                )
+                completedCoordinators.insert(key)
+                // Keep managed objects on their own queue; only stable IDs leave the worker.
+                for offset in stride(from: 0, to: summary.compressedObjectIDs.count, by: 8) {
+                    let end = min(offset + 8, summary.compressedObjectIDs.count)
+                    let records = summary.compressedObjectIDs[offset..<end].compactMap {
+                        context.object(with: $0) as? AdRecord
+                    }
+                    PersistenceController.shared.shareOwnedRecordsIfNeeded(records)
+                    await Task.yield()
+                }
+                if !summary.compressedObjectIDs.isEmpty {
+                    AppLogger.shared.log("后台压缩了 \(summary.compressedObjectIDs.count) 条过大的截图")
+                }
+                if summary.conflictedCount > 0 {
+                    AppLogger.shared.log("截图维护跳过了 \(summary.conflictedCount) 条同时被修改的记录")
+                }
+            } catch {
+                AppLogger.shared.log("后台截图维护失败: \(PersistenceController.describe(error))")
             }
-            record.photoData = compressedData
-            record.updatedAt = Date()
-            changedRecords.append(record)
         }
-
-        guard !changedRecords.isEmpty else { return }
-        try context.save()
-        context.processPendingChanges()
-        PersistenceController.shared.shareOwnedRecordsIfNeeded(changedRecords)
-        AppLogger.shared.log("压缩了 \(changedRecords.count) 条过大的截图")
-    } catch {
-        AppLogger.shared.log("压缩旧截图失败: \(PersistenceController.describe(error))")
-    }
-}
-
-func cleanupOldPhotos(context: NSManagedObjectContext) {
-    let threeMonthsAgo = qddCalendar.date(byAdding: .month, value: -3, to: Date()) ?? Date()
-    let request: NSFetchRequest<AdRecord> = AdRecord.fetchRequest()
-    request.predicate = NSPredicate(format: "photoData != nil AND createdAt < %@", threeMonthsAgo as NSDate)
-
-    do {
-        let oldRecords = try context.fetch(request)
-        guard !oldRecords.isEmpty else { return }
-        var count = 0
-        for record in oldRecords {
-            if record.photoData != nil {
-                record.photoData = nil
-                count += 1
-            }
-        }
-        if count > 0 {
-            try context.save()
-            AppLogger.shared.log("自动清理了 \(count) 条超过三个月的截图数据")
-        }
-    } catch {
-        AppLogger.shared.log("清理旧截图失败: \(error.localizedDescription)")
     }
 }
 
@@ -151,11 +158,45 @@ struct ExportVideoLikeSnapshot: Codable {
     let updatedAt: Date?
 }
 
+struct ExportTodoItem: Codable {
+    let id: String
+    let title: String?
+    let notes: String?
+    let createdAt: Date?
+    let updatedAt: Date?
+    let completedAt: Date?
+    let dueDate: Date?
+    let sortOrder: Double
+    var linkedContent: String? = nil
+}
+
 struct ExportDataBundle: Codable {
     let formatVersion: Int?
     let records: [ExportRecord]
     let followerSnapshots: [ExportFollowerSnapshot]
     let videoLikeSnapshots: [ExportVideoLikeSnapshot]?
+    let todoItems: [ExportTodoItem]?
+    var assistantMemory: [AIMemoryItem]? = nil
+    var assistantModel: String? = nil
+    var assistantBaseURL: String? = nil
+
+    init(
+        formatVersion: Int?, records: [ExportRecord],
+        followerSnapshots: [ExportFollowerSnapshot], videoLikeSnapshots: [ExportVideoLikeSnapshot]?,
+        todoItems: [ExportTodoItem]? = nil,
+        assistantMemory: [AIMemoryItem]? = nil,
+        assistantModel: String? = nil,
+        assistantBaseURL: String? = nil
+    ) {
+        self.formatVersion = formatVersion
+        self.records = records
+        self.followerSnapshots = followerSnapshots
+        self.videoLikeSnapshots = videoLikeSnapshots
+        self.todoItems = todoItems
+        self.assistantMemory = assistantMemory
+        self.assistantModel = assistantModel
+        self.assistantBaseURL = assistantBaseURL
+    }
 }
 
 func exportRecords(context: NSManagedObjectContext) -> Data? {
@@ -167,6 +208,12 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
 
     let videoLikeRequest: NSFetchRequest<VideoLikeSnapshot> = VideoLikeSnapshot.fetchRequest()
     videoLikeRequest.sortDescriptors = [NSSortDescriptor(keyPath: \VideoLikeSnapshot.recordedAt, ascending: false)]
+
+    let todoRequest: NSFetchRequest<TodoItem> = TodoItem.fetchRequest()
+    todoRequest.sortDescriptors = [
+        NSSortDescriptor(keyPath: \TodoItem.sortOrder, ascending: true),
+        NSSortDescriptor(keyPath: \TodoItem.createdAt, ascending: true)
+    ]
 
     do {
         let records = try context.fetch(request)
@@ -219,11 +266,31 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
                 updatedAt: snapshot.updatedAt
             )
         }
+        let todoItems = try context.fetch(todoRequest).map { item in
+            ExportTodoItem(
+                id: item.id?.uuidString ?? UUID().uuidString,
+                title: item.title,
+                notes: item.notes,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+                completedAt: item.completedAt,
+                dueDate: item.dueDate,
+                sortOrder: item.sortOrder,
+                linkedContent: item.linkedContent
+            )
+        }
+        let sharedConfig = AISharedConfig.load(in: context)
+        let memoryItems = AIMemoryStore.load(in: context)
         let exportBundle = ExportDataBundle(
-            formatVersion: 2,
+            // Older apps reject this version rather than silently discarding content links.
+            formatVersion: 4,
             records: exportList,
             followerSnapshots: followerSnapshots,
-            videoLikeSnapshots: videoLikeSnapshots
+            videoLikeSnapshots: videoLikeSnapshots,
+            todoItems: todoItems,
+            assistantMemory: memoryItems.isEmpty ? nil : memoryItems,
+            assistantModel: AISharedConfig.nonEmpty(sharedConfig.model) ?? AISharedConfig.nonEmpty(AIAssistantConfig.model),
+            assistantBaseURL: AISharedConfig.nonEmpty(sharedConfig.baseURL)
         )
         let encoder = JSONEncoder()
         // Native Date encoding preserves subsecond timestamps exactly.
@@ -231,7 +298,7 @@ func exportRecords(context: NSManagedObjectContext) -> Data? {
         encoder.dataEncodingStrategy = .base64
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         AppLogger.shared.log(
-            "导出了 \(exportList.count) 条合作记录、\(followerSnapshots.count) 条粉丝记录和 \(videoLikeSnapshots.count) 条点赞记录"
+            "导出了 \(exportList.count) 条合作记录、\(followerSnapshots.count) 条粉丝记录、\(videoLikeSnapshots.count) 条点赞记录和 \(todoItems.count) 条待办"
         )
         return try encoder.encode(exportBundle)
     } catch {
@@ -257,9 +324,10 @@ struct RecordImportSummary {
     }
 }
 
-private enum BackupImportError: LocalizedError {
+nonisolated enum BackupImportError: LocalizedError {
     case invalidRecordID
     case unsupportedFormat
+    case unsavedDataSpace
 
     var errorDescription: String? {
         switch self {
@@ -267,6 +335,8 @@ private enum BackupImportError: LocalizedError {
             "备份中有无效的记录标识，未导入任何数据。"
         case .unsupportedFormat:
             "这份备份来自更新版本，请先更新 App 后再导入。"
+        case .unsavedDataSpace:
+            "还有刚新建、尚未保存的内容。请先保存或取消正在编辑的内容，再导入备份。未导入任何数据。"
         }
     }
 }
@@ -282,6 +352,11 @@ private func backupRecordID(_ value: String) throws -> UUID {
     return id
 }
 
+/// Imports a backup and merges the new rows into `context` (normally the view context).
+///
+/// The rows are written by a separate context on the same coordinator: a failed import is discarded
+/// there without rolling back unsaved edits in `context`, and a successful one never commits them.
+/// `context` must belong to `persistence`.
 func importRecords(
     data: Data,
     context: NSManagedObjectContext,
@@ -289,13 +364,18 @@ func importRecords(
 ) throws -> RecordImportSummary {
     let decoder = JSONDecoder()
     decoder.dataDecodingStrategy = .base64
+    let importContext = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
+    importContext.persistentStoreCoordinator = persistence.container.persistentStoreCoordinator
+    importContext.name = "BackupImport"
+    importContext.undoManager = nil
+    importContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
 
     do {
         let version = (try? decoder.decode(BackupFormatHeader.self, from: data))?.formatVersion ?? 1
         switch version {
         case 1:
             decoder.dateDecodingStrategy = .iso8601
-        case 2:
+        case 2, 3, 4:
             decoder.dateDecodingStrategy = .deferredToDate
         default:
             throw BackupImportError.unsupportedFormat
@@ -312,35 +392,51 @@ func importRecords(
         let followerIDs = try importBundle.followerSnapshots.map { try backupRecordID($0.id) }
         let likeItems = importBundle.videoLikeSnapshots ?? []
         let likeIDs = try likeItems.map { try backupRecordID($0.id) }
+        let todoItems = importBundle.todoItems ?? []
+        let todoIDs = try todoItems.map { try backupRecordID($0.id) }
 
-        var existingRecordIDs = Set(try context.fetch(AdRecord.fetchRequest()).compactMap(\.id))
-        var existingFollowerIDs = Set(try context.fetch(FollowerSnapshot.fetchRequest()).compactMap(\.id))
-        var existingLikeIDs = Set(try context.fetch(VideoLikeSnapshot.fetchRequest()).compactMap(\.id))
+        var existingRecordIDs = Set(try importContext.fetch(AdRecord.fetchRequest()).compactMap(\.id))
+        var existingFollowerIDs = Set(try importContext.fetch(FollowerSnapshot.fetchRequest()).compactMap(\.id))
+        var existingLikeIDs = Set(try importContext.fetch(VideoLikeSnapshot.fetchRequest()).compactMap(\.id))
+        var existingTodoIDs = Set(try importContext.fetch(TodoItem.fetchRequest()).compactMap(\.id))
 
         let hasNewRecords = recordIDs.contains { !existingRecordIDs.contains($0) }
             || followerIDs.contains { !existingFollowerIDs.contains($0) }
             || likeIDs.contains { !existingLikeIDs.contains($0) }
+            || todoIDs.contains { !existingTodoIDs.contains($0) }
         guard hasNewRecords else {
             return RecordImportSummary(
                 importedCount: 0,
-                skippedCount: recordIDs.count + followerIDs.count + likeIDs.count
+                skippedCount: recordIDs.count + followerIDs.count + likeIDs.count + todoIDs.count
             )
         }
 
-        let syncSpace = try persistence.activeSyncSpace(in: context)
+        let syncSpace: SyncSpace
+        if let existingSpace = try persistence.existingActiveSyncSpace(in: importContext) {
+            syncSpace = existingSpace
+        } else {
+            // The caller's context may hold a space created for an edit that is not saved yet. A second
+            // space here would split records across two spaces, and sharing only follows one of them.
+            let hasUnsavedSpace = context.performAndWait {
+                context.insertedObjects.contains { $0 is SyncSpace }
+            }
+            guard !hasUnsavedSpace else { throw BackupImportError.unsavedDataSpace }
+            syncSpace = try persistence.activeSyncSpace(in: importContext)
+        }
         var imported = 0
         var skipped = 0
         var importedRecords: [AdRecord] = []
         var importedFollowerSnapshots: [FollowerSnapshot] = []
         var importedVideoLikeSnapshots: [VideoLikeSnapshot] = []
+        var importedTodoItems: [TodoItem] = []
         for (item, id) in zip(importBundle.records, recordIDs) {
             guard existingRecordIDs.insert(id).inserted else {
                 skipped += 1
                 continue
             }
-            let record = AdRecord(context: context)
+            let record = AdRecord(context: importContext)
             if let store = syncSpace.objectID.persistentStore {
-                context.assign(record, to: store)
+                importContext.assign(record, to: store)
             }
             record.syncSpace = syncSpace
             record.id = id
@@ -376,9 +472,9 @@ func importRecords(
                 skipped += 1
                 continue
             }
-            let snapshot = FollowerSnapshot(context: context)
+            let snapshot = FollowerSnapshot(context: importContext)
             if let store = syncSpace.objectID.persistentStore {
-                context.assign(snapshot, to: store)
+                importContext.assign(snapshot, to: store)
             }
             snapshot.syncSpace = syncSpace
             snapshot.id = id
@@ -395,9 +491,9 @@ func importRecords(
                 skipped += 1
                 continue
             }
-            let snapshot = VideoLikeSnapshot(context: context)
+            let snapshot = VideoLikeSnapshot(context: importContext)
             if let store = syncSpace.objectID.persistentStore {
-                context.assign(snapshot, to: store)
+                importContext.assign(snapshot, to: store)
             }
             snapshot.syncSpace = syncSpace
             snapshot.id = id
@@ -411,19 +507,53 @@ func importRecords(
             importedVideoLikeSnapshots.append(snapshot)
             imported += 1
         }
-        try context.save()
-        context.processPendingChanges()
+        for (item, id) in zip(todoItems, todoIDs) {
+            guard existingTodoIDs.insert(id).inserted else {
+                skipped += 1
+                continue
+            }
+            let todo = TodoItem(context: importContext)
+            if let store = syncSpace.objectID.persistentStore {
+                importContext.assign(todo, to: store)
+            }
+            todo.syncSpace = syncSpace
+            todo.id = id
+            todo.title = item.title
+            todo.notes = item.notes
+            todo.linkedContent = item.linkedContent
+            todo.createdAt = item.createdAt
+            todo.updatedAt = item.updatedAt
+            todo.completedAt = item.completedAt
+            todo.dueDate = item.dueDate
+            todo.sortOrder = item.sortOrder
+            importedTodoItems.append(todo)
+            imported += 1
+        }
+        let insertedObjects = importContext.insertedObjects
+        let updatedObjects = importContext.updatedObjects
+        try importContext.save()
+        // Merge now instead of waiting for automatic merging, so the caller sees the new rows and the
+        // space's relationships right away. Unsaved edits in `context` are kept, not committed.
+        NSManagedObjectContext.mergeChanges(
+            fromRemoteContextSave: [
+                NSInsertedObjectsKey: insertedObjects.map(\.objectID),
+                NSUpdatedObjectsKey: updatedObjects.map(\.objectID)
+            ],
+            into: [context]
+        )
         persistence.shareOwnedRecordsIfNeeded(importedRecords)
         persistence.shareOwnedFollowerSnapshotsIfNeeded(importedFollowerSnapshots)
         persistence.shareOwnedVideoLikeSnapshotsIfNeeded(importedVideoLikeSnapshots)
+        persistence.shareOwnedTodoItemsIfNeeded(importedTodoItems)
         notifyRecordsChanged()
         AppLogger.shared.log(
-            "导入了 \(importedRecords.count) 条合作记录、\(importedFollowerSnapshots.count) 条粉丝记录和 \(importedVideoLikeSnapshots.count) 条点赞记录，跳过 \(skipped) 条重复记录"
+            "导入了 \(importedRecords.count) 条合作记录、\(importedFollowerSnapshots.count) 条粉丝记录、\(importedVideoLikeSnapshots.count) 条点赞记录和 \(importedTodoItems.count) 条待办，跳过 \(skipped) 条重复记录"
         )
         return RecordImportSummary(importedCount: imported, skippedCount: skipped)
     } catch {
-        AppLogger.shared.log("导入失败: \(error.localizedDescription)")
-        context.rollback()
+        // Only the import's own context is discarded; edits still open elsewhere are untouched.
+        importContext.rollback()
+        AppLogger.shared.log("导入失败，已放弃本次导入，未改动其他未保存内容: \(PersistenceController.describe(error))")
         throw error
     }
 }

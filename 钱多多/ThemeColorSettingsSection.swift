@@ -2,6 +2,9 @@ import SwiftUI
 import UIKit
 
 struct ThemeColorSettingsSection: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .subheadline) private var hexFieldWidth = 104
+    @ScaledMetric(relativeTo: .subheadline) private var channelLabelWidth = 20
     private let preferences = AppThemeSettings.shared
     @State private var showsFineTuning = false
     @State private var hexInput = ""
@@ -17,8 +20,16 @@ struct ThemeColorSettingsSection: View {
         ("石墨", AppThemeColor(red: 89, green: 97, blue: 107))
     ]
 
+    private static let earthPresets: [(name: String, color: AppThemeColor)] = [
+        ("沙丘桃", AppThemeColor(red: 242, green: 194, blue: 153)),
+        ("杏尘", AppThemeColor(red: 228, green: 156, blue: 105)),
+        ("余烬岩", AppThemeColor(red: 197, green: 108, blue: 57)),
+        ("土坯棕", AppThemeColor(red: 138, green: 75, blue: 47)),
+        ("可可壳", AppThemeColor(red: 92, green: 59, blue: 46))
+    ]
+
     var body: some View {
-        SettingsCardSection("主题色", footer: "修改会自动保存，仅影响这台设备。") {
+        SettingsCardSection("主题色") {
             ColorPicker(selection: colorBinding, supportsOpacity: false) {
                 Label {
                     VStack(alignment: .leading, spacing: 3) {
@@ -35,38 +46,9 @@ struct ThemeColorSettingsSection: View {
 
             SettingsRowDivider()
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("常用配色")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 6), spacing: 0) {
-                    ForEach(Self.presets.indices, id: \.self) { index in
-                        let preset = Self.presets[index]
-                        let isSelected = preferences.color == preset.color
-                        Button {
-                            preferences.color = preset.color
-                        } label: {
-                            Circle()
-                                .fill(preset.color.swiftUIColor)
-                                .frame(width: 28, height: 28)
-                                .overlay {
-                                    if isSelected {
-                                        Image(systemName: "checkmark")
-                                            .font(.caption2.weight(.bold))
-                                            .foregroundStyle(preset.color.foregroundColor)
-                                    }
-                                }
-                                .frame(width: 38, height: 38)
-                                .overlay {
-                                    Circle().stroke(isSelected ? AppTheme.readablePrimary : .clear, lineWidth: 1.5)
-                                }
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                                .contentShape(Rectangle())
-                        }
-                        .accessibilityLabel(preset.name)
-                        .accessibilityAddTraits(isSelected ? .isSelected : [])
-                    }
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                presetGroup("常用配色", presets: Self.presets)
+                presetGroup("大地暖色", presets: Self.earthPresets)
             }
             .padding(.vertical, 10)
 
@@ -78,6 +60,7 @@ struct ThemeColorSettingsSection: View {
                 Label("精细调整", systemImage: "slider.horizontal.3")
                     .settingsRow()
             }
+            .disclosureGroupStyle(ThemeFineTuningDisclosureStyle())
 
             SettingsRowDivider()
 
@@ -96,33 +79,76 @@ struct ThemeColorSettingsSection: View {
                 hexError = nil
             }
         }
+        .onChange(of: showsFineTuning) { _, isExpanded in
+            if !isExpanded { isEditingHex = false }
+        }
+    }
+
+    private func presetGroup(_ title: String, presets: [(name: String, color: AppThemeColor)]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 60), spacing: 4)], alignment: .leading, spacing: 4) {
+                ForEach(presets.indices, id: \.self) { index in
+                    let preset = presets[index]
+                    let isSelected = preferences.color == preset.color
+                    Button {
+                        preferences.color = preset.color
+                    } label: {
+                        Circle()
+                            .fill(preset.color.swiftUIColor)
+                            .frame(width: 28, height: 28)
+                            .overlay {
+                                if isSelected {
+                                    Image(systemName: "checkmark")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(preset.color.foregroundColor)
+                                }
+                            }
+                            .frame(width: 38, height: 38)
+                            .overlay {
+                                Circle().stroke(isSelected ? AppTheme.readablePrimary : .clear, lineWidth: 1.5)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .accessibilityLabel(preset.name)
+                    .accessibilityAddTraits(isSelected ? .isSelected : [])
+                }
+            }
+        }
     }
 
     private var fineTuning: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
+            colorCodeLayout {
                 Text("颜色代码").font(.subheadline)
-                Spacer(minLength: 4)
-                TextField("8B5E3C", text: $hexInput)
-                    .font(.subheadline.monospaced())
-                    .keyboardType(.asciiCapable)
-                    .textInputAutocapitalization(.characters)
-                    .autocorrectionDisabled()
-                    .submitLabel(.done)
-                    .focused($isEditingHex)
-                    .onSubmit(applyHex)
-                    .padding(8)
-                    .frame(width: 100)
-                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius))
-                    .accessibilityLabel("六位颜色代码")
-                Button("应用", action: applyHex)
-                    .foregroundStyle(AppTheme.readablePrimary)
-                    .frame(minWidth: 44, minHeight: 44)
+                colorCodeLayout {
+                    if !usesStackedControls { Spacer(minLength: 4) }
+                    TextField("8B5E3C", text: $hexInput)
+                        .font(.subheadline.monospaced())
+                        .keyboardType(.asciiCapable)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .submitLabel(.done)
+                        .focused($isEditingHex)
+                        .onSubmit(applyHex)
+                        .padding(8)
+                        .frame(width: usesStackedControls ? nil : hexFieldWidth)
+                        .frame(maxWidth: usesStackedControls ? .infinity : nil, alignment: .leading)
+                        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius))
+                        .accessibilityLabel("六位颜色代码")
+                    Button("应用", action: applyHex)
+                        .foregroundStyle(AppTheme.readablePrimary)
+                        .frame(minWidth: 44, minHeight: 44)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
             if let hexError {
                 Text(hexError)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(AppTheme.danger)
             }
             channelSlider("红", keyPath: \.red)
             channelSlider("绿", keyPath: \.green)
@@ -131,6 +157,14 @@ struct ThemeColorSettingsSection: View {
         .padding(.top, 4)
         .padding(.bottom, 12)
     }
+
+    private var colorCodeLayout: AnyLayout {
+        usesStackedControls
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 10))
+    }
+
+    private var usesStackedControls: Bool { dynamicTypeSize >= .xLarge }
 
     private var colorBinding: Binding<Color> {
         Binding(
@@ -141,7 +175,7 @@ struct ThemeColorSettingsSection: View {
 
     private func channelSlider(_ title: String, keyPath: KeyPath<AppThemeColor, Int>) -> some View {
         HStack(spacing: 10) {
-            Text(title).font(.subheadline).frame(width: 20)
+            Text(title).font(.subheadline).frame(width: channelLabelWidth)
             Slider(value: Binding(
                 get: { Double(preferences.color[keyPath: keyPath]) },
                 set: { value in
@@ -159,7 +193,7 @@ struct ThemeColorSettingsSection: View {
             Text("\(preferences.color[keyPath: keyPath])")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .frame(width: 30, alignment: .trailing)
+                .fixedSize(horizontal: true, vertical: false)
         }
     }
 
@@ -172,5 +206,41 @@ struct ThemeColorSettingsSection: View {
         hexInput = color.hex
         hexError = nil
         isEditingHex = false
+    }
+}
+
+/// This disclosure lives inside one self-sizing List row. Keep its height change out of
+/// the animation transaction so the card and UIKit-backed controls are laid out once.
+private struct ThemeFineTuningDisclosureStyle: DisclosureGroupStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations = true
+                withTransaction(transaction) {
+                    configuration.isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    configuration.label
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(AppTheme.readablePrimary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isExpanded)
+                        .transaction { $0.disablesAnimations = false }
+                        .accessibilityHidden(true)
+                }
+                .contentShape(Rectangle())
+            }
+            .accessibilityValue(configuration.isExpanded ? "已展开" : "已收起")
+
+            if configuration.isExpanded {
+                configuration.content
+                    .transition(.identity)
+            }
+        }
     }
 }

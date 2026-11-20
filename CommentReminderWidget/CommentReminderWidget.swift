@@ -6,6 +6,7 @@ import WidgetKit
 @main
 struct CommentReminderWidgetBundle: WidgetBundle {
     var body: some Widget {
+        TodoListWidget()
         CommentReminderLiveActivity()
     }
 }

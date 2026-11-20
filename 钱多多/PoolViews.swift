@@ -8,6 +8,7 @@ import SwiftUI
 import UIKit
 
 struct PoolPage: View {
+    @State private var saveError: NSError?
     @Environment(\.managedObjectContext) private var viewContext
 
     @FetchRequest(
@@ -65,25 +66,13 @@ struct PoolPage: View {
         sortedLookNumbers(from: pendingPoolRecords)
     }
 
-    private var totalPendingAmount: Double {
-        pendingPoolRecords.reduce(0) { $0 + $1.billableAmount }
-    }
-
-    private var categorySummary: [PoolCategorySummary] {
-        let grouped = Dictionary(grouping: pendingPoolRecords) { $0.categoryValue }
-        return AdCategory.allCases.compactMap { category in
-            guard let records = grouped[category], !records.isEmpty else { return nil }
-            let amount = records.reduce(0) { $0 + $1.billableAmount }
-            return PoolCategorySummary(category: category, count: records.count, amount: amount)
-        }
-    }
-
     var body: some View {
         GeometryReader { rootProxy in
             ZStack {
                 NavigationStack {
                     poolContent
                 .navigationTitle("池子")
+                .saveFailureAlert($saveError)
                 .softPageBackground()
                 .searchable(text: $searchText, prompt: "搜索品牌、微信")
                 .toolbar {
@@ -102,6 +91,8 @@ struct PoolPage: View {
                         } label: {
                             Label("新增", systemImage: "plus")
                         }
+                        .foregroundStyle(.primary)
+                        .tint(Color.primary)
                     }
                 }
                 .sheet(isPresented: $showingEditor) {
@@ -144,7 +135,6 @@ struct PoolPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 MonthSelector(selectedMonth: $selectedMonth)
-                poolSummaryCard
                 poolFilterCard
                 PoolListHeader(viewMode: $viewMode)
                     .padding(.top, 2)
@@ -171,18 +161,12 @@ struct PoolPage: View {
                     )
                 }
             }
-            .padding(.horizontal, AppLayout.editorHorizontalInset + AppLayout.listHorizontalInset)
-            .padding(.top, 10)
+            .padding(.horizontal, AppLayout.homePageHorizontalInset)
+            .padding(.top, AppLayout.homePageTopInset)
             .padding(.bottom, 118)
         }
-    }
-
-    private var poolSummaryCard: some View {
-        PoolSummaryPanel(
-            totalCount: pendingPoolRecords.count,
-            totalAmount: totalPendingAmount,
-            categorySummary: categorySummary
-        )
+        .scrollBounceBehavior(.always, axes: .vertical)
+        .cloudSyncRefreshable()
     }
 
     private var poolFilterCard: some View {
@@ -273,14 +257,12 @@ struct PoolPage: View {
     }
 
     private func saveContext() {
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
     }
 }
 
@@ -357,17 +339,17 @@ struct PoolRecordRow: View {
                             } label: {
                                 Text(remarkText)
                                     .font(.caption)
-                                    .foregroundStyle(Color.orange)
+                                    .foregroundStyle(AppTheme.warning)
                                     .lineLimit(2)
                                     .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                                     .padding(6)
                                     .frame(width: 86, height: 48)
                                     .clipped()
-                                    .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous))
+                                    .background(AppTheme.warning.opacity(0.09), in: RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous))
                                     .overlay {
                                         RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous)
-                                            .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+                                            .stroke(AppTheme.warning.opacity(0.3), lineWidth: 1)
                                     }
                                     .contentShape(RoundedRectangle(cornerRadius: AppLayout.thumbnailCornerRadius, style: .continuous))
                             }
@@ -681,6 +663,7 @@ private struct PoolPhotoFlipFace: View {
 }
 
 struct RecordRemarkEditor: View {
+    @State private var saveError: NSError?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
     @ObservedObject var record: AdRecord
@@ -699,6 +682,7 @@ struct RecordRemarkEditor: View {
             }
         }
         .navigationTitle("编辑备注")
+        .saveFailureAlert($saveError)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
@@ -720,15 +704,13 @@ struct RecordRemarkEditor: View {
         record.paymentNote = trimmedNote.isEmpty ? nil : trimmedNote
         record.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        dismiss()
     }
 }
 
@@ -1366,9 +1348,9 @@ final class PoolRecordCollectionCell: UICollectionViewCell {
             : UIColor.systemBackground
         deleteIconView.tintColor = AppTheme.onPrimaryUIColor
         deleteIconView.backgroundColor = AppTheme.primaryUIColor
-        cardView.layer.borderColor = AppTheme.readablePrimaryUIColor.resolvedColor(with: traitCollection)
-            .withAlphaComponent(isDark ? 0.2 : 0.08)
-            .cgColor
+        cardView.layer.borderColor = isDark
+            ? AppTheme.readablePrimaryUIColor.resolvedColor(with: traitCollection).withAlphaComponent(0.2).cgColor
+            : UIColor.clear.cgColor
 
         contentView.layer.shadowColor = UIColor.black.cgColor
         contentView.layer.shadowOpacity = isDark ? 0.42 : Float(AppLayout.lightCardShadowOpacity)
@@ -1703,8 +1685,8 @@ struct PoolFilterFields: View {
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.borderless)
-                .foregroundStyle(.red)
-                .tint(.red)
+                .foregroundStyle(AppTheme.danger)
+                .tint(AppTheme.danger)
                 .padding(.top, 8)
             }
         }

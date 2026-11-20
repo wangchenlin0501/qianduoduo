@@ -10,6 +10,7 @@ import SwiftUI
 import UIKit
 
 struct PoolRecordEditor: View {
+    @State private var saveError: NSError?
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
@@ -185,7 +186,7 @@ struct PoolRecordEditor: View {
                         if !lookNumberText.isEmpty && validLookNumber == nil {
                             Text("Look 编号请输入 1–50")
                                 .font(.caption)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(AppTheme.warning)
                         }
                     }
                     PoolEditorFieldRow("报价", symbol: "yensign.circle.fill", showsSeparator: false) {
@@ -200,6 +201,11 @@ struct PoolRecordEditor: View {
                 .buttonStyle(.borderless)
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
+            }
+            .listRowBackground(groupBackground)
+
+            Section("池子月份") {
+                PoolMonthSelectorRow(selectedMonth: $selectedPoolMonth)
             }
             .listRowBackground(groupBackground)
 
@@ -225,11 +231,6 @@ struct PoolRecordEditor: View {
                         arrivalDate = dayOnly(Date())
                     }
                 }
-            }
-            .listRowBackground(groupBackground)
-
-            Section("池子月份") {
-                PoolMonthSelectorRow(selectedMonth: $selectedPoolMonth)
             }
             .listRowBackground(groupBackground)
 
@@ -259,6 +260,7 @@ struct PoolRecordEditor: View {
             .listRowBackground(groupBackground)
         }
         .navigationTitle(record == nil ? "新增池子记录" : "编辑池子记录")
+        .saveFailureAlert($saveError)
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
         .background(pageBackground.ignoresSafeArea())
@@ -344,16 +346,14 @@ struct PoolRecordEditor: View {
         target.clothingName = nil
         target.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            PersistenceController.shared.shareOwnedRecordIfNeeded(target)
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        PersistenceController.shared.shareOwnedRecordIfNeeded(target)
+        notifyRecordsChanged()
+        dismiss()
     }
 
     private func cleaned(_ value: String) -> String {
@@ -362,6 +362,7 @@ struct PoolRecordEditor: View {
 }
 
 struct AdRecordEditor: View {
+    @State private var saveError: NSError?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.managedObjectContext) private var viewContext
 
@@ -412,7 +413,7 @@ struct AdRecordEditor: View {
                             dateLabel: "打款日期",
                             hint: "确认打款后点击记录",
                             symbolName: "yensign.circle.fill",
-                            tint: .green
+                            tint: AppTheme.success
                         ) {
                             isPaid.toggle()
                             if isPaid {
@@ -501,6 +502,7 @@ struct AdRecordEditor: View {
             }
         }
         .navigationTitle("编辑记录")
+        .saveFailureAlert($saveError)
         .softPageBackground()
         .onChange(of: partnership) { _, newValue in
             if !newValue.needsPayment {
@@ -558,15 +560,13 @@ struct AdRecordEditor: View {
         target.clothingName = nil
         target.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
-            let nsError = error as NSError
-            assertionFailure("Unresolved CoreData error \(nsError), \(nsError.userInfo)")
+        if let error = viewContext.saveRollingBackOnFailure() {
+            saveError = error
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        dismiss()
     }
 
     private func cleaned(_ value: String) -> String {
@@ -619,8 +619,8 @@ private struct PoolEditorFieldRow<Content: View>: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             content
-                .foregroundStyle(.secondary)
-                .tint(.secondary)
+                .foregroundStyle(.primary)
+                .tint(.primary)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.vertical, 12)
@@ -711,34 +711,29 @@ struct PhotoPickerRow: View {
                 .buttonStyle(.plain)
             }
 
-            HStack(spacing: 12) {
-                PhotosPicker(selection: $photoPickerItem, matching: .images) {
-                    Label(photoData == nil ? "添加截图" : "更换截图", systemImage: "photo.on.rectangle.angled")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.borderless)
-
-                if photoData != nil {
-                    Spacer()
+            if photoData != nil {
+                HStack(spacing: 8) {
+                    PhotosPicker(selection: $photoPickerItem, matching: .images) {
+                        photoActionLabel("更换", symbol: "arrow.triangle.2.circlepath")
+                    }
+                    .buttonStyle(.plain)
 
                     Button {
                         beginCroppingCurrentPhoto()
                     } label: {
-                        Label("裁切", systemImage: "crop")
-                            .font(.subheadline.weight(.semibold))
+                        photoActionLabel("裁切", symbol: "crop")
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
+
+                    Spacer()
 
                     Button(role: .destructive) {
                         photoData = nil
                         photoPickerItem = nil
                     } label: {
-                        Label("删除", systemImage: "trash")
-                            .font(.subheadline.weight(.semibold))
+                        photoActionLabel("删除", symbol: "trash", isDestructive: true)
                     }
-                    .buttonStyle(.borderless)
-                    .tint(.red)
-                    .foregroundStyle(.red)
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -820,23 +815,29 @@ struct PhotoPickerRow: View {
     }
 
     private var emptyPhotoPicker: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "photo.on.rectangle.angled")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(AppTheme.readablePrimary)
-
-            Text("添加截图")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(AppTheme.readablePrimary)
-        }
+        Image(systemName: "square.and.arrow.up")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(AppTheme.readablePrimary)
+            .frame(width: 56, height: 56)
+            .background(AppTheme.primary.opacity(0.14), in: Circle())
         .frame(maxWidth: .infinity)
         .frame(height: 156)
         .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous)
-                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                .strokeBorder(AppTheme.primary.opacity(0.4), style: StrokeStyle(lineWidth: 1.2, dash: [6, 5]))
         }
         .contentShape(RoundedRectangle(cornerRadius: AppLayout.controlCornerRadius, style: .continuous))
+    }
+
+    private func photoActionLabel(_ title: String, symbol: String, isDestructive: Bool = false) -> some View {
+        let tint = isDestructive ? AppTheme.danger : AppTheme.readablePrimary
+        return Label(title, systemImage: symbol)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background((isDestructive ? AppTheme.danger : AppTheme.primary).opacity(0.12), in: Capsule())
     }
 
     private func editorPhotoPreview(image: UIImage) -> some View {
@@ -1515,9 +1516,9 @@ struct PaymentPill: View {
             Text(record.needsPayment ? (status == .paid ? "已结清" : "待结款") : "无需打款")
         }
             .font(.caption.weight(.bold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .foregroundStyle(record.needsPayment ? tint : AppTheme.readable(tint))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .background(tint.opacity(0.12), in: Capsule())
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)

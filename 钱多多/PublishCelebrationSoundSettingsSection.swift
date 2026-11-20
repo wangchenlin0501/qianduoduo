@@ -9,19 +9,30 @@ struct PublishCelebrationSoundSettingsSection: View {
     @State private var showingRestoreConfirmation = false
     @State private var errorMessage: String?
 
+    private var soundDescription: String {
+        var description = "录音会同步给你的其他设备和共享成员。发布时跟随系统静音。"
+        if audio.hasUnsyncedLocalRecording {
+            description += "旧录音需手动同步。"
+        }
+        if !audio.canChangeSound {
+            description += "当前共享只读，不能更换音效。"
+        }
+        return description
+    }
+
+    private var soundName: String {
+        if audio.hasUnsyncedLocalRecording { return "本机录音（未同步）" }
+        return audio.hasCustomRecording ? "自定义录音" : "默认庆祝音"
+    }
+
     var body: some View {
         SettingsCardSection(
-            "发布庆祝音效",
-            footer: "发布时遵循系统静音设置。自定义录音仅保存在本机，不会随共享或数据导出发送。"
+            "发布庆祝音效"
         ) {
-            HStack(spacing: 12) {
-                Label("当前音效", systemImage: "waveform")
-                Spacer(minLength: 8)
-                Text(audio.hasCustomRecording ? "我的录音" : "默认庆祝音")
+            SettingsValueRow("当前音效", systemImage: "waveform") {
+                Text(soundName)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
             }
-            .settingsRow()
 
             SettingsRowDivider()
 
@@ -29,8 +40,11 @@ struct PublishCelebrationSoundSettingsSection: View {
                 if audio.isPlaying {
                     audio.stop()
                 } else {
-                    do { try audio.previewSelected() }
-                    catch { errorMessage = "无法播放音效，请重新录制或恢复默认音效。" }
+                    Task {
+                        do { try await audio.previewSelected() }
+                        catch is CancellationError { }
+                        catch { errorMessage = "无法播放，请重录或恢复默认。" }
+                    }
                 }
             } label: {
                 Label(audio.isPlaying ? "停止试听" : "试听音效", systemImage: audio.isPlaying ? "stop.circle" : "play.circle")
@@ -46,6 +60,20 @@ struct PublishCelebrationSoundSettingsSection: View {
                 Label(audio.hasCustomRecording ? "重新录制声音" : "录制我的声音", systemImage: "mic")
                     .settingsRow()
             }
+            .disabled(!audio.canChangeSound)
+
+            if audio.hasUnsyncedLocalRecording {
+                SettingsRowDivider()
+
+                Button {
+                    do { try audio.syncExistingRecording() }
+                    catch { errorMessage = error.localizedDescription }
+                } label: {
+                    Label("同步已有录音", systemImage: "icloud.and.arrow.up")
+                        .settingsRow()
+                }
+                .disabled(!audio.canChangeSound)
+            }
 
             if audio.hasCustomRecording {
                 SettingsRowDivider()
@@ -56,6 +84,7 @@ struct PublishCelebrationSoundSettingsSection: View {
                     Label("恢复默认音效", systemImage: "arrow.counterclockwise")
                         .settingsRow()
                 }
+                .disabled(!audio.canChangeSound)
             }
         }
         .onAppear { audio.refreshSelection() }
@@ -67,13 +96,14 @@ struct PublishCelebrationSoundSettingsSection: View {
             PublishCelebrationRecordingSheet()
         }
         .confirmationDialog("恢复默认音效？", isPresented: $showingRestoreConfirmation, titleVisibility: .visible) {
-            Button("删除录音并恢复默认", role: .destructive) {
+            Button("恢复默认音效", role: .destructive) {
                 do { try audio.restoreDefault() }
-                catch { errorMessage = "无法恢复默认音效，请稍后重试。" }
+                catch { errorMessage = error.localizedDescription }
             }
+            .disabled(!audio.canChangeSound)
             Button("取消", role: .cancel) { }
         } message: {
-            Text("这会删除本机保存的自定义录音。")
+            Text("其他设备和共享成员也会恢复默认音效。")
         }
         .alert("音效", isPresented: Binding(
             get: { errorMessage != nil },
@@ -95,16 +125,19 @@ private struct PublishCelebrationRecordingSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section {
+                SettingsCardSection(
+                    recorder.isRecording ? "正在录音" : recorder.hasDraft ? "试听录音" : "录制声音",
+                    footer: "保存后会同步给其他设备和共享成员。"
+                ) {
                     VStack(alignment: .leading, spacing: 16) {
-                        Text(recorder.isRecording ? "正在录音" : recorder.hasDraft ? "试听你的庆祝声" : "录下你的庆祝声")
-                            .font(.title2.bold())
-                        Text("最长 3 秒，录好后先试听，满意再使用。")
+                        Text("最长 3 秒，可先试听。")
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
                         Text(String(format: "%.1f / 3.0 秒", recorder.duration))
                             .font(.title.monospacedDigit())
-                            .foregroundStyle(recorder.isRecording ? Color.red : .primary)
+                            .foregroundStyle(recorder.isRecording ? AppTheme.danger : .primary)
                             .accessibilityLabel("已录制 \(recorder.duration, specifier: "%.1f") 秒，最长 3 秒")
 
                         Button {
@@ -115,47 +148,65 @@ private struct PublishCelebrationRecordingSheet: View {
                             }
                         } label: {
                             Label(
-                                recorder.isRecording ? "停止录音" : recorder.isRequestingPermission ? "正在请求麦克风权限" : recorder.hasDraft ? "重新录制" : "开始录音",
+                                recorder.isRecording ? "停止录音" : recorder.isRequestingPermission ? "等待麦克风授权" : recorder.hasDraft ? "重新录制" : "开始录音",
                                 systemImage: recorder.isRecording ? "stop.fill" : "mic.fill"
                             )
+                            .labelStyle(.titleAndIcon)
+                            .font(.body.weight(.semibold))
+                            .multilineTextAlignment(.center)
                             .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
-                        .tint(recorder.isRecording ? .red : AppTheme.readablePrimary)
-                        .disabled(recorder.isRequestingPermission)
+                        .frame(maxWidth: .infinity)
+                        .tint(recorder.isRecording ? AppTheme.danger : AppTheme.readablePrimary)
+                        .disabled(recorder.isRequestingPermission || recorder.isFinishingRecording || (!audio.canChangeSound && !recorder.isRecording))
 
                         if recorder.hasDraft {
                             Button {
                                 if audio.isPlaying { audio.stop() }
-                                else { recorder.preview() }
+                                else { Task { await recorder.preview() } }
                             } label: {
                                 Label(audio.isPlaying ? "停止试听" : "试听录音", systemImage: audio.isPlaying ? "stop.circle" : "play.circle")
+                                    .labelStyle(.titleAndIcon)
+                                    .font(.body.weight(.semibold))
+                                    .multilineTextAlignment(.center)
                                     .frame(maxWidth: .infinity, minHeight: 44)
                             }
                             .buttonStyle(.bordered)
+                            .frame(maxWidth: .infinity)
+                            .disabled(recorder.isRecording || recorder.isRequestingPermission || recorder.isFinishingRecording)
                         }
 
                         if let error = recorder.errorMessage {
                             Text(error)
                                 .font(.callout)
-                                .foregroundStyle(.red)
+                                .foregroundStyle(AppTheme.danger)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                                 .accessibilityAddTraits(.updatesFrequently)
                         }
 
                         if recorder.permissionDenied {
-                            Button("打开麦克风设置") {
+                            Button {
                                 guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
                                 UIApplication.shared.open(url)
+                            } label: {
+                                Text("打开麦克风设置")
+                                    .font(.body.weight(.semibold))
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: .infinity, minHeight: 44)
                             }
-                            .frame(minHeight: 44)
+                            .buttonStyle(.bordered)
+                            .frame(maxWidth: .infinity)
                         }
                     }
-                    .padding(.vertical, 8)
-                } footer: {
-                    Text("只有点击“使用录音”才会替换当前音效。录音仅保存在本机。")
+                    .buttonBorderShape(.roundedRectangle(radius: AppLayout.controlCornerRadius))
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .listStyle(.insetGrouped)
+            .listSectionSpacing(.compact)
             .softPageBackground()
             .navigationTitle("自定义庆祝音效")
             .navigationBarTitleDisplayMode(.inline)
@@ -167,7 +218,7 @@ private struct PublishCelebrationRecordingSheet: View {
                     Button("使用录音") {
                         if recorder.save() { dismiss() }
                     }
-                    .disabled(!recorder.hasDraft || recorder.isRecording || recorder.isRequestingPermission)
+                    .disabled(!recorder.hasDraft || recorder.isRecording || recorder.isRequestingPermission || recorder.isFinishingRecording || !audio.canChangeSound)
                 }
             }
             .tint(AppTheme.readablePrimary)

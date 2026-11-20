@@ -3,8 +3,10 @@ import SwiftUI
 import UIKit
 
 struct VideoCalendarDragSource {
+    enum Kind { case video, todo }
     let scopeID: UUID
     let recordURI: String
+    var kind: Kind = .video
 }
 
 enum VideoCalendarCellLayout {
@@ -20,25 +22,31 @@ enum VideoCalendarCellLayout {
     }
 }
 
-/// Dates are fixed collection cells; each video tile owns its own drag interaction.
+/// Dates stay fixed; videos and tasks own independent native drag interactions.
 struct VideoCalendarCollectionView: UIViewRepresentable {
     @Environment(\.appThemeColor) private var appThemeColor
     let days: [Date?]
     let groups: [VideoGroup]
+    let todos: [VideoCalendarTodo]
     let dragScope: UUID
-    let rowHeight: CGFloat
+    let weekHeights: [CGFloat]
+    let todoHeight: CGFloat
+    let expandedDays: Set<Date>
     let openVideo: (VideoGroup) -> Void
+    let openTodo: (String) -> Void
+    let toggleTodos: (Date) -> Void
     let generateBrandImage: (String) -> Void
     let addVideo: (Date) -> Void
     let resolveDestination: (String, Date) -> Date?
     let moveVideo: (String, Date) -> Date?
+    let moveTodo: (String, Date) -> Date?
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
     }
 
     func makeUIView(context: Context) -> UICollectionView {
-        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.layout(rowHeight: rowHeight))
+        let collectionView = UICollectionView(frame: .zero, collectionViewLayout: Self.layout(weekHeights: weekHeights))
         collectionView.backgroundColor = .clear
         collectionView.isScrollEnabled = false
         collectionView.contentInsetAdjustmentBehavior = .never
@@ -55,10 +63,10 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
         _ = appThemeColor
         let coordinator = context.coordinator
         let daysChanged = coordinator.parent.days != days
-        let heightChanged = coordinator.parent.rowHeight != rowHeight
+        let heightChanged = coordinator.parent.weekHeights != weekHeights
         coordinator.update(parent: self)
         if heightChanged {
-            collectionView.setCollectionViewLayout(Self.layout(rowHeight: rowHeight), animated: false)
+            collectionView.setCollectionViewLayout(Self.layout(weekHeights: weekHeights), animated: false)
         }
         if daysChanged {
             collectionView.reloadData()
@@ -71,22 +79,30 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
         }
     }
 
-    private static func layout(rowHeight: CGFloat) -> UICollectionViewLayout {
-        let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
-            widthDimension: .fractionalWidth(1.0 / 7), heightDimension: .fractionalHeight(1)
-        ))
-        let row = NSCollectionLayoutGroup.horizontal(
-            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(rowHeight)),
-            subitems: Array(repeating: item, count: 7)
+    private static func layout(weekHeights: [CGFloat]) -> UICollectionViewLayout {
+        let weeks = weekHeights.map { height in
+            let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1.0 / 7), heightDimension: .fractionalHeight(1)
+            ))
+            return NSCollectionLayoutGroup.horizontal(
+                layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(height)),
+                subitems: Array(repeating: item, count: 7)
+            )
+        }
+        let month = NSCollectionLayoutGroup.vertical(
+            layoutSize: NSCollectionLayoutSize(widthDimension: .fractionalWidth(1), heightDimension: .absolute(max(1, weekHeights.reduce(0, +)))),
+            subitems: weeks
         )
-        return UICollectionViewCompositionalLayout(section: NSCollectionLayoutSection(group: row))
+        return UICollectionViewCompositionalLayout(section: NSCollectionLayoutSection(group: month))
     }
 
     final class Coordinator: NSObject, UICollectionViewDataSource, UICollectionViewDelegate, UIDragInteractionDelegate, UICollectionViewDropDelegate {
         var parent: VideoCalendarCollectionView
         private var groupsByDay: [Date: [VideoGroup]] = [:]
+        private var todosByDay: [Date: [VideoCalendarTodo]] = [:]
         private var targetedIndexPath: IndexPath?
-        private var isDraggingVideo = false
+        private var targetedKind: VideoCalendarDragSource.Kind = .video
+        private var isDraggingItem = false
 
         init(parent: VideoCalendarCollectionView) {
             self.parent = parent
@@ -100,6 +116,7 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
                 guard let date = group.monthDate else { return }
                 result[dayOnly(date), default: []].append(group)
             }
+            todosByDay = Dictionary(grouping: parent.todos, by: \.date)
         }
 
         private func date(at indexPath: IndexPath) -> Date? {
@@ -123,12 +140,21 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
         }
 
         func configure(_ cell: VideoCalendarDayCell, at indexPath: IndexPath) {
+            let date = date(at: indexPath)
             cell.configure(
-                date: date(at: indexPath), group: group(at: indexPath),
+                date: date, group: group(at: indexPath),
+                todos: date.flatMap { todosByDay[dayOnly($0)] } ?? [],
+                expanded: date.map { parent.expandedDays.contains(dayOnly($0)) } ?? false,
+                todoHeight: parent.todoHeight,
                 showsBottomSeparator: indexPath.item < parent.days.count - 7,
-                dragDelegate: self, generateBrandImage: parent.generateBrandImage
+                dragDelegate: self, generateBrandImage: parent.generateBrandImage,
+                openTodo: parent.openTodo,
+                toggleTodos: { [weak self] in
+                    guard let self, let date, !self.isDraggingItem else { return }
+                    self.parent.toggleTodos(dayOnly(date))
+                }
             )
-            cell.setDropTarget(indexPath == targetedIndexPath)
+            cell.setDropTarget(indexPath == targetedIndexPath, kind: targetedKind)
             cell.onActivate = { [weak self] in self?.activate(at: indexPath) ?? false }
         }
 
@@ -144,17 +170,22 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
             collectionView.deselectItem(at: indexPath, animated: false)
-            guard !isDraggingVideo else { return }
+            guard !isDraggingItem else { return }
             _ = activate(at: indexPath)
         }
 
         func dragInteraction(_ interaction: UIDragInteraction, itemsForBeginning session: any UIDragSession) -> [UIDragItem] {
-            guard let tile = interaction.view as? VideoCalendarTileView, tile.canDrag,
-                  let recordURI = tile.recordURI else { return [] }
-            let item = UIDragItem(itemProvider: NSItemProvider(object: recordURI as NSString))
-            item.localObject = VideoCalendarDragSource(scopeID: parent.dragScope, recordURI: recordURI)
-            // Freeze only the content artwork, before the source is hidden or reused.
-            let preview = tile.artwork.makeDragPreview()
+            let source: VideoCalendarDragSource
+            let preview: UIDragPreview
+            if let tile = interaction.view as? VideoCalendarTileView, tile.canDrag, let id = tile.recordURI {
+                source = VideoCalendarDragSource(scopeID: parent.dragScope, recordURI: id)
+                preview = tile.artwork.makeDragPreview()
+            } else if let tile = interaction.view as? VideoCalendarTodoTileView, tile.canDrag, let id = tile.todoID {
+                source = VideoCalendarDragSource(scopeID: parent.dragScope, recordURI: id, kind: .todo)
+                preview = tile.makeDragPreview()
+            } else { return [] }
+            let item = UIDragItem(itemProvider: NSItemProvider(object: source.recordURI as NSString))
+            item.localObject = source
             item.previewProvider = { preview }
             return [item]
         }
@@ -182,7 +213,7 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
         }
 
         func dragInteraction(_ interaction: UIDragInteraction, willAnimateLiftWith animator: any UIDragAnimating, session: any UIDragSession) {
-            isDraggingVideo = true
+            isDraggingItem = true
             animator.addAnimations { [weak source = interaction.view] in source?.alpha = 0 }
         }
 
@@ -191,7 +222,7 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
         }
 
         func dragInteraction(_ interaction: UIDragInteraction, sessionWillBegin session: any UIDragSession) {
-            isDraggingVideo = true
+            isDraggingItem = true
             interaction.view?.alpha = 0
         }
 
@@ -199,7 +230,7 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
             if operation == .move || operation == .copy {
                 interaction.view?.alpha = 1
             }
-            isDraggingVideo = false
+            isDraggingItem = false
         }
 
         func collectionView(_ collectionView: UICollectionView, canHandle session: any UIDropSession) -> Bool {
@@ -217,9 +248,10 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
                 setTarget(nil, in: collectionView)
                 return UICollectionViewDropProposal(operation: .forbidden)
             }
-            let resolvedIndex = parent.resolveDestination(source.recordURI, requestedDate)
+            let resolvedDate = source.kind == .todo ? requestedDate : parent.resolveDestination(source.recordURI, requestedDate)
+            let resolvedIndex = resolvedDate
                 .flatMap { self.indexPath(for: $0) }
-            setTarget(resolvedIndex, in: collectionView)
+            setTarget(resolvedIndex, kind: source.kind, in: collectionView)
             // On release the save handler reports a full month or changed data,
             // rather than failing silently when no valid destination is available.
             // Calendar dates stay fixed. Only a video's schedule moves, so no insertion gap.
@@ -232,11 +264,19 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
                   let source = item.dragItem.localObject as? VideoCalendarDragSource, source.scopeID == parent.dragScope,
                   let indexPath = collectionView.indexPathForItem(at: coordinator.session.location(in: collectionView)),
                   let date = date(at: indexPath) else { return }
-            if let resolvedDate = parent.moveVideo(source.recordURI, date),
+            let result = source.kind == .todo ? parent.moveTodo(source.recordURI, date) : parent.moveVideo(source.recordURI, date)
+            if let resolvedDate = result,
                let resolvedIndex = self.indexPath(for: resolvedDate) {
                 let bounds = collectionView.cellForItem(at: resolvedIndex)?.bounds
-                    ?? CGRect(x: 0, y: 0, width: collectionView.bounds.width / 7, height: parent.rowHeight)
-                coordinator.drop(item.dragItem, intoItemAt: resolvedIndex, rect: VideoCalendarCellLayout.tileFrame(in: bounds))
+                    ?? CGRect(x: 0, y: 0, width: collectionView.bounds.width / 7, height: parent.weekHeights[resolvedIndex.item / 7])
+                let target: CGRect
+                if source.kind == .todo {
+                    let top = min(VideoCalendarContentLayout.todoTop(hasVideo: group(at: resolvedIndex) != nil), max(0, bounds.height - parent.todoHeight))
+                    target = CGRect(x: 3, y: top, width: max(0, bounds.width - 6), height: parent.todoHeight)
+                } else {
+                    target = VideoCalendarCellLayout.tileFrame(in: bounds)
+                }
+                coordinator.drop(item.dragItem, intoItemAt: resolvedIndex, rect: target)
             }
         }
 
@@ -253,14 +293,15 @@ struct VideoCalendarCollectionView: UIViewRepresentable {
             setTarget(nil, in: collectionView)
         }
 
-        private func setTarget(_ indexPath: IndexPath?, in collectionView: UICollectionView) {
-            guard indexPath != targetedIndexPath else { return }
+        private func setTarget(_ indexPath: IndexPath?, kind: VideoCalendarDragSource.Kind = .video, in collectionView: UICollectionView) {
+            guard indexPath != targetedIndexPath || kind != targetedKind else { return }
             if let previous = targetedIndexPath, let cell = collectionView.cellForItem(at: previous) as? VideoCalendarDayCell {
                 cell.setDropTarget(false)
             }
             targetedIndexPath = indexPath
+            targetedKind = kind
             if let indexPath, let cell = collectionView.cellForItem(at: indexPath) as? VideoCalendarDayCell {
-                cell.setDropTarget(true)
+                cell.setDropTarget(true, kind: kind)
             }
         }
     }
@@ -276,6 +317,14 @@ final class VideoCalendarDayCell: UICollectionViewCell {
     private let dropTarget = CAShapeLayer()
     private var showsBottomSeparator = true
     private let videoTile = VideoCalendarTileView()
+    private var todoTiles: [String: VideoCalendarTodoTileView] = [:]
+    private var visibleTodoIDs: [String] = []
+    private let moreTodosButton = UIButton(type: .system)
+    private var onToggleTodos: (() -> Void)?
+    private var hasVideo = false
+    private var todoHeight: CGFloat = 48
+    private var dropKind: VideoCalendarDragSource.Kind = .video
+    private lazy var dayAccessibility = VideoCalendarDayAccessibilityElement(accessibilityContainer: self)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -292,14 +341,25 @@ final class VideoCalendarDayCell: UICollectionViewCell {
         contentView.addSubview(dateLabel)
         contentView.addSubview(arrivalIcon)
         contentView.addSubview(videoTile)
+        moreTodosButton.titleLabel?.font = UIFont.preferredFont(forTextStyle: .caption2)
+        moreTodosButton.titleLabel?.adjustsFontForContentSizeCategory = true
+        moreTodosButton.addTarget(self, action: #selector(toggleTodos), for: .touchUpInside)
+        moreTodosButton.isHidden = true
+        contentView.addSubview(moreTodosButton)
         contentView.layer.addSublayer(bottomSeparator)
         backgroundConfiguration = .clear()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    func configure(date: Date?, group: VideoGroup?, showsBottomSeparator: Bool, dragDelegate: any UIDragInteractionDelegate, generateBrandImage: @escaping (String) -> Void) {
+    func configure(date: Date?, group: VideoGroup?, todos: [VideoCalendarTodo], expanded: Bool,
+                   todoHeight: CGFloat, showsBottomSeparator: Bool, dragDelegate: any UIDragInteractionDelegate,
+                   generateBrandImage: @escaping (String) -> Void, openTodo: @escaping (String) -> Void,
+                   toggleTodos: @escaping () -> Void) {
         self.showsBottomSeparator = showsBottomSeparator
+        self.todoHeight = todoHeight
+        hasVideo = group != nil
+        onToggleTodos = toggleTodos
         let isToday = date.map { qddCalendar.isDateInToday($0) } ?? false
         dateLabel.text = date.map { "\(qddCalendar.component(.day, from: $0))" }
         dateLabel.font = UIFontMetrics(forTextStyle: .caption1).scaledFont(
@@ -310,21 +370,44 @@ final class VideoCalendarDayCell: UICollectionViewCell {
         dateLabel.isHidden = date == nil
         arrivalIcon.isHidden = date == nil || group?.allArrived != true
         videoTile.configure(group: group, dragDelegate: dragDelegate, generateBrandImage: generateBrandImage)
+        let visibleTodos = expanded ? todos : Array(todos.prefix(VideoCalendarContentLayout.collapsedTodoLimit))
+        visibleTodoIDs = visibleTodos.map(\.id)
+        let visibleIDs = Set(visibleTodoIDs)
+        for (id, tile) in todoTiles where !visibleIDs.contains(id) {
+            // Keep a lifted source alive until UIKit ends its drag session.
+            tile.isHidden = true
+            if tile.alpha != 0 {
+                tile.removeFromSuperview()
+                todoTiles.removeValue(forKey: id)
+            }
+        }
+        for todo in visibleTodos {
+            let tile = todoTiles[todo.id] ?? VideoCalendarTodoTileView()
+            if tile.superview == nil { contentView.addSubview(tile) }
+            todoTiles[todo.id] = tile
+            tile.isHidden = false
+            tile.configure(todo: todo, dragDelegate: dragDelegate) { openTodo(todo.id) }
+        }
+        moreTodosButton.isHidden = todos.count <= VideoCalendarContentLayout.collapsedTodoLimit
+        moreTodosButton.setTitle(expanded ? "收起" : "+\(todos.count - visibleTodos.count)项", for: .normal)
+        moreTodosButton.tintColor = AppTheme.readablePrimaryUIColor
+        moreTodosButton.accessibilityLabel = expanded ? "收起当天待办" : "展开其余\(todos.count - visibleTodos.count)条待办"
         setNeedsLayout()
-        isAccessibilityElement = date != nil
-        accessibilityTraits = .button
+        isAccessibilityElement = false
+        dayAccessibility.accessibilityTraits = .button
+        dayAccessibility.onActivate = { [weak self] in self?.onActivate?() ?? false }
         if let date {
-            accessibilityLabel = [
+            dayAccessibility.accessibilityLabel = [
                 chineseDateText(date), group?.title ?? "暂无排期",
                 group.map { $0.allPublished ? "已发布" : "待发布" } ?? "",
                 group.map { $0.allArrived ? "全部到货" : "未全部到货" } ?? ""
             ].filter { !$0.isEmpty }.joined(separator: "，")
-            accessibilityHint = group == nil ? "安排视频" : (group?.allPublished == true
+            dayAccessibility.accessibilityHint = group == nil ? "安排视频" : (group?.allPublished == true
                 ? "轻点打开视频，长按复制品牌名或生成图片"
                 : "轻点打开视频，长按拖动调整日期")
             if let group, group.allPublished {
                 let text = numberedBrandNamesCopyText(group.records.map(\.titleText))
-                accessibilityCustomActions = [
+                dayAccessibility.accessibilityCustomActions = [
                     UIAccessibilityCustomAction(name: "复制品牌名") { _ in
                         UIPasteboard.general.string = text
                         return true
@@ -335,17 +418,23 @@ final class VideoCalendarDayCell: UICollectionViewCell {
                     }
                 ]
             } else {
-                accessibilityCustomActions = nil
+                dayAccessibility.accessibilityCustomActions = nil
             }
+            var elements: [Any] = [dayAccessibility]
+            elements.append(contentsOf: visibleTodoIDs.compactMap { todoTiles[$0] })
+            if !moreTodosButton.isHidden { elements.append(moreTodosButton) }
+            accessibilityElements = elements
         } else {
-            accessibilityLabel = nil
-            accessibilityHint = nil
-            accessibilityCustomActions = nil
+            accessibilityElements = []
         }
     }
 
-    func setDropTarget(_ isTarget: Bool) {
+    @objc private func toggleTodos() { onToggleTodos?() }
+
+    func setDropTarget(_ isTarget: Bool, kind: VideoCalendarDragSource.Kind = .video) {
+        dropKind = kind
         dropTarget.isHidden = !isTarget
+        setNeedsLayout()
     }
 
     override func accessibilityActivate() -> Bool { onActivate?() ?? false }
@@ -369,6 +458,15 @@ final class VideoCalendarDayCell: UICollectionViewCell {
             height: arrivalIconSize
         )
         videoTile.frame = VideoCalendarCellLayout.tileFrame(in: bounds)
+        let top = VideoCalendarContentLayout.todoTop(hasVideo: hasVideo)
+        for (index, id) in visibleTodoIDs.enumerated() {
+            todoTiles[id]?.frame = CGRect(x: 0, y: top + CGFloat(index) * (todoHeight + VideoCalendarContentLayout.gap),
+                                         width: bounds.width, height: todoHeight)
+        }
+        moreTodosButton.frame = CGRect(x: 0, y: top + CGFloat(visibleTodoIDs.count) * (todoHeight + VideoCalendarContentLayout.gap),
+                                       width: bounds.width, height: todoHeight)
+        dayAccessibility.accessibilityFrameInContainerSpace = CGRect(x: 0, y: 0, width: bounds.width,
+                                                                    height: hasVideo ? videoTile.frame.maxY : VideoCalendarContentLayout.contentTop)
         let isDark = traitCollection.userInterfaceStyle == .dark
         backgroundColor = .clear
         CATransaction.begin()
@@ -378,7 +476,7 @@ final class VideoCalendarDayCell: UICollectionViewCell {
             .withAlphaComponent(isDark ? 0.09 : 0.055).cgColor
         bottomSeparator.frame = CGRect(x: 0, y: bounds.maxY - lineWidth, width: bounds.width, height: lineWidth)
         bottomSeparator.isHidden = !showsBottomSeparator
-        dropTarget.frame = videoTile.frame.insetBy(dx: -1, dy: -1)
+        dropTarget.frame = dropKind == .todo ? bounds.insetBy(dx: 1, dy: 1) : videoTile.frame.insetBy(dx: -1, dy: -1)
         dropTarget.path = UIBezierPath(roundedRect: dropTarget.bounds, cornerRadius: AppLayout.controlCornerRadius + 1).cgPath
         dropTarget.fillColor = AppTheme.primaryUIColor.withAlphaComponent(0.08).cgColor
         dropTarget.strokeColor = AppTheme.readablePrimaryUIColor.resolvedColor(with: traitCollection).withAlphaComponent(0.65).cgColor
@@ -391,8 +489,19 @@ final class VideoCalendarDayCell: UICollectionViewCell {
         dateLabel.text = nil
         arrivalIcon.isHidden = true
         videoTile.reset()
+        todoTiles.values.forEach { $0.removeFromSuperview() }
+        todoTiles.removeAll()
+        visibleTodoIDs = []
+        moreTodosButton.isHidden = true
+        onToggleTodos = nil
+        accessibilityElements = []
         setDropTarget(false)
     }
+}
+
+private final class VideoCalendarDayAccessibilityElement: UIAccessibilityElement {
+    var onActivate: (() -> Bool)?
+    override func accessibilityActivate() -> Bool { onActivate?() ?? false }
 }
 
 final class VideoCalendarTileView: UIView, UIContextMenuInteractionDelegate {

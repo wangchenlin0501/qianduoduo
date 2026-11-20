@@ -8,16 +8,8 @@ import CoreData
 import SwiftUI
 
 private enum SummaryPalette {
-    static let positive = Color(
-        red: 53.0 / 255.0,
-        green: 193.0 / 255.0,
-        blue: 90.0 / 255.0
-    )
-    static let negative = Color(
-        red: 237.0 / 255.0,
-        green: 75.0 / 255.0,
-        blue: 67.0 / 255.0
-    )
+    static let positive = AppTheme.success
+    static let negative = AppTheme.danger
 }
 
 struct SummaryPage: View {
@@ -90,8 +82,7 @@ struct SummaryPage: View {
 
     private func businessRecords(for month: Date) -> [AdRecord] {
         records.filter { record in
-            (record.publishedDate != nil || record.statusValue == .paid) &&
-                qddCalendar.isDate(record.reportDate, equalTo: month, toGranularity: .month)
+            qddCalendar.isDate(record.reportDate, equalTo: month, toGranularity: .month)
         }
     }
 
@@ -206,14 +197,16 @@ struct SummaryPage: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    MonthSelector(selectedMonth: $selectedMonth)
+                    VStack(spacing: AppLayout.homeMonthSelectorContentSpacing) {
+                        MonthSelector(selectedMonth: $selectedMonth)
 
-                    SummaryDashboard(
-                        businessStats: businessStats,
-                        previousBusinessStats: previousBusinessStats,
-                        partnershipItems: partnershipBreakdown,
-                        categoryItems: categoryBreakdown
-                    )
+                        SummaryDashboard(
+                            businessStats: businessStats,
+                            previousBusinessStats: previousBusinessStats,
+                            partnershipItems: partnershipBreakdown,
+                            categoryItems: categoryBreakdown
+                        )
+                    }
 
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
@@ -240,10 +233,12 @@ struct SummaryPage: View {
                         ContentPerformanceCard(items: contentPerformanceItems)
                     }
                 }
-                .padding(.horizontal, AppLayout.editorHorizontalInset)
-                .padding(.top, 8)
+                .padding(.horizontal, AppLayout.homePageHorizontalInset)
+                .padding(.top, AppLayout.homePageTopInset)
                 .padding(.bottom, 16)
             }
+            .scrollBounceBehavior(.always, axes: .vertical)
+            .cloudSyncRefreshable()
             .navigationTitle("汇总")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -258,9 +253,8 @@ struct SummaryPage: View {
             .onReceive(NotificationCenter.default.publisher(for: .adRecordsDidChange)) { _ in
                 refreshToken = UUID()
             }
-            .onAppear {
-                recompressLargePhotos(context: viewContext)
-                cleanupOldPhotos(context: viewContext)
+            .task {
+                PhotoMaintenanceService.shared.schedule(using: viewContext)
             }
             .sheet(isPresented: $showingFollowerDataEditor) {
                 NavigationStack {
@@ -279,6 +273,8 @@ struct MonthStats {
     let unitPrice: Double
     let recordCount: Int
     let billableRecordCount: Int
+    let paidRecordCount: Int
+    let unpaidRecordCount: Int
 
     init(records: [AdRecord]) {
         paid = records.reduce(0) { $0 + $1.paidValue }
@@ -286,6 +282,8 @@ struct MonthStats {
         total = paid + unpaid
         recordCount = records.count
         billableRecordCount = records.count(where: \.needsPayment)
+        paidRecordCount = records.count(where: { $0.paidValue > 0 })
+        unpaidRecordCount = records.count(where: { $0.remainingAmount > 0 })
         unitPrice = billableRecordCount == 0 ? 0 : total / Double(billableRecordCount)
     }
 }
@@ -327,19 +325,14 @@ struct CardExpansionButton: View {
                 isExpanded.toggle()
             }
         } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "chevron.down")
-                    .font(.caption.weight(.bold))
-                    .rotationEffect(.degrees(isExpanded ? 180 : 0))
-
-                Text(isExpanded ? "收起" : "展开")
-                    .font(.subheadline.weight(.semibold))
-                    .transaction { transaction in
-                        transaction.animation = nil
-                    }
-            }
+            Image(systemName: "chevron.down")
+                .font(.caption.weight(.bold))
+                .rotationEffect(.degrees(isExpanded ? 180 : 0))
+                .transaction { transaction in
+                    transaction.animation = nil
+                }
             .foregroundStyle(AppTheme.readablePrimary)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(AppTheme.primary.opacity(0.1), in: Capsule())
             .contentShape(Capsule())
@@ -379,6 +372,7 @@ struct ContentPerformanceCard: View {
             VStack(alignment: .leading, spacing: 0) {
                 HStack {
                     AppCardTitle(title: "内容表现", symbol: "heart.text.square.fill")
+                    CardExpansionButton(isExpanded: $isExpanded)
                     Spacer()
                     Text("本月 \(items.count) 条")
                         .font(.caption)
@@ -419,8 +413,6 @@ struct ContentPerformanceCard: View {
             .padding(.vertical, 4)
             .recordCard()
 
-            CardExpansionButton(isExpanded: $isExpanded)
-                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 
@@ -634,28 +626,32 @@ struct SummaryDashboard: View {
 
     @State private var isExpanded = false
 
-    private var comparisonMetrics: [MonthComparisonMetric] {
-        [
-            MonthComparisonMetric(
-                title: "合作金额",
-                current: businessStats.total,
-                previous: previousBusinessStats.total
-            ),
-            MonthComparisonMetric(
-                title: "合作件数",
-                current: Double(businessStats.recordCount),
-                previous: Double(previousBusinessStats.recordCount)
-            ),
-            MonthComparisonMetric(
-                title: "平均报价",
-                current: businessStats.unitPrice,
-                previous: previousBusinessStats.unitPrice
-            )
-        ]
+    private var amountChange: MonthComparisonMetric {
+        MonthComparisonMetric(
+            title: "合作金额",
+            current: businessStats.total,
+            previous: previousBusinessStats.total
+        )
+    }
+
+    private var countChange: MonthComparisonMetric {
+        MonthComparisonMetric(
+            title: "合作件数",
+            current: Double(businessStats.recordCount),
+            previous: Double(previousBusinessStats.recordCount)
+        )
+    }
+
+    private var unitPriceChange: MonthComparisonMetric {
+        MonthComparisonMetric(
+            title: "平均报价",
+            current: businessStats.unitPrice,
+            previous: previousBusinessStats.unitPrice
+        )
     }
 
     var body: some View {
-        ExpandableSummaryCard(isExpanded: $isExpanded) {
+        ExpandableSummaryCard(isExpanded: $isExpanded, showsToggle: false) {
             fixedOverview
         } details: {
             detailsContent
@@ -679,13 +675,18 @@ struct SummaryDashboard: View {
                 Text("当月合作金额")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(moneyText(businessStats.total))
-                    .font(.largeTitle.weight(.bold))
-                    .foregroundStyle(businessStats.total > 0 ? .primary : .secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.58)
-                    .scaleEffect(isExpanded ? 1.055 : 1, anchor: .leading)
-                    .animation(.smooth(duration: 0.4, extraBounce: 0), value: isExpanded)
+                HStack(spacing: 10) {
+                    Text(moneyText(businessStats.total))
+                        .font(.largeTitle.weight(.bold))
+                        .foregroundStyle(businessStats.total > 0 ? .primary : .secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.58)
+                    CardExpansionButton(isExpanded: $isExpanded)
+                }
+                .scaleEffect(isExpanded ? 1.055 : 1, anchor: .leading)
+                .animation(.smooth(duration: 0.4, extraBounce: 0), value: isExpanded)
+
+                MonthChangeLabel(metric: amountChange, font: .footnote)
             }
 
             PaymentProgressSummary(
@@ -700,18 +701,16 @@ struct SummaryDashboard: View {
         VStack(alignment: .leading, spacing: 14) {
             Grid(horizontalSpacing: 10, verticalSpacing: 10) {
                 GridRow {
-                    SummaryTile(title: "已回款", value: moneyText(businessStats.paid), symbol: "checkmark.circle.fill", tint: SummaryPalette.positive)
-                    SummaryTile(title: "待回款", value: moneyText(businessStats.unpaid), symbol: "clock.fill", tint: SummaryPalette.negative)
+                    SummaryTile(title: "已回款", value: moneyText(businessStats.paid), symbol: "checkmark.circle.fill", tint: SummaryPalette.positive, caption: "\(businessStats.paidRecordCount) 笔")
+                    SummaryTile(title: "待回款", value: moneyText(businessStats.unpaid), symbol: "clock.fill", tint: SummaryPalette.negative, caption: "\(businessStats.unpaidRecordCount) 笔")
                 }
 
                 GridRow {
-                    SummaryTile(title: "合作件数", value: "\(businessStats.recordCount) 件", symbol: "number.circle.fill", tint: AppTheme.primary)
-                    SummaryTile(title: "平均报价", value: moneyText(businessStats.unitPrice), symbol: "tag.fill", tint: .orange)
+                    SummaryTile(title: "合作件数", value: "\(businessStats.recordCount) 件", symbol: "number.circle.fill", change: countChange)
+                    SummaryTile(title: "平均报价", value: moneyText(businessStats.unitPrice), symbol: "tag.fill", change: unitPriceChange)
                 }
             }
             .frame(maxWidth: .infinity)
-
-            MonthComparisonView(metrics: comparisonMetrics)
 
             if !partnershipItems.isEmpty {
                 Divider()
@@ -739,11 +738,21 @@ struct MonthComparisonMetric: Identifiable {
     }
 
     var changeText: String {
-        if previous == 0 {
-            return current == 0 ? "持平" : "新增"
-        }
+        guard direction != .same else { return "持平" }
+        if previous == 0 { return "新增" }
         let percentage = abs((current - previous) / previous) * 100
-        return String(format: "%.0f%%", percentage)
+        return percentage < 1 ? "<1%" : String(format: "%.0f%%", percentage)
+    }
+
+    var accessibilityText: String {
+        switch direction {
+        case .same:
+            "较上月持平"
+        case .up:
+            previous == 0 ? "较上月新增" : "较上月增长\(changeText)"
+        case .down:
+            "较上月下降\(changeText)"
+        }
     }
 }
 
@@ -775,34 +784,29 @@ enum ComparisonDirection {
     }
 }
 
-struct MonthComparisonView: View {
-    let metrics: [MonthComparisonMetric]
+struct MonthChangeLabel: View {
+    let metric: MonthComparisonMetric
+    var font: Font = .caption
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        HStack(spacing: 4) {
             Text("较上月")
-                .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
-
-            HStack(spacing: 8) {
-                ForEach(metrics) { metric in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(metric.title)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                        Label(metric.changeText, systemImage: metric.direction.symbolName)
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(metric.direction.tint)
-                            .lineLimit(1)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(9)
-                    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: AppLayout.compactControlCornerRadius, style: .continuous))
+            HStack(spacing: 2) {
+                if metric.direction != .same {
+                    Image(systemName: metric.direction.symbolName)
+                        .imageScale(.small)
                 }
+                Text(metric.changeText)
+                    .monospacedDigit()
             }
+            .fontWeight(.semibold)
+            .foregroundStyle(metric.direction.tint)
         }
+        .font(font)
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(metric.accessibilityText)
     }
 }
 
@@ -1132,6 +1136,7 @@ struct FollowerDataEditor: View {
                             } label: {
                                 Label("删除", systemImage: "trash")
                             }
+                            .tint(AppTheme.danger)
 
                             Button {
                                 editingSnapshot = snapshot
@@ -1192,34 +1197,32 @@ struct FollowerDataEditor: View {
         snapshot.followerCount = parsedCount
         snapshot.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            if isNewSnapshot {
-                PersistenceController.shared.shareOwnedFollowerSnapshotIfNeeded(snapshot)
-            }
-            notifyRecordsChanged()
-            dismiss()
-        } catch {
+        // Roll back on failure: otherwise the half-created snapshot stays in the context and a retry adds a second one.
+        if viewContext.saveRollingBackOnFailure("保存粉丝数据") != nil {
             errorMessage = "保存失败，请稍后重试"
-            AppLogger.shared.log("保存粉丝数据失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        if isNewSnapshot {
+            PersistenceController.shared.shareOwnedFollowerSnapshotIfNeeded(snapshot)
+        }
+        notifyRecordsChanged()
+        dismiss()
     }
 
     private func deleteSnapshot(_ snapshot: FollowerSnapshot) {
         let deletedToday = snapshot.date.map(qddCalendar.isDateInToday) ?? false
         viewContext.delete(snapshot)
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            if deletedToday {
-                countText = ""
-            }
-            notifyRecordsChanged()
-        } catch {
+        // Roll back on failure so the pending delete cannot be committed by an unrelated save later.
+        if viewContext.saveRollingBackOnFailure("删除粉丝数据") != nil {
             errorMessage = "删除失败，请稍后重试"
-            AppLogger.shared.log("删除粉丝数据失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        if deletedToday {
+            countText = ""
+        }
+        notifyRecordsChanged()
     }
 }
 
@@ -1323,16 +1326,14 @@ struct FollowerSnapshotEditor: View {
         snapshot.followerCount = parsedCount
         snapshot.updatedAt = Date()
 
-        do {
-            try viewContext.save()
-            viewContext.processPendingChanges()
-            notifyRecordsChanged()
-            onSaved()
-            dismiss()
-        } catch {
+        if viewContext.saveRollingBackOnFailure("更新粉丝数据") != nil {
             errorMessage = "保存失败，请稍后重试"
-            AppLogger.shared.log("更新粉丝数据失败: \(error.localizedDescription)")
+            return
         }
+        viewContext.processPendingChanges()
+        notifyRecordsChanged()
+        onSaved()
+        dismiss()
     }
 }
 
@@ -1392,7 +1393,7 @@ private struct FollowerCountInputCard: View {
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.circle.fill")
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(AppTheme.danger)
                     .multilineTextAlignment(.center)
             }
         }
@@ -1442,32 +1443,50 @@ struct SummaryTile: View {
     let title: String
     let value: String
     let symbol: String
-    let tint: Color
+    var tint: Color? = nil
+    var caption: String? = nil
+    var change: MonthComparisonMetric? = nil
+
+    private var shape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: symbol)
                     .font(.caption)
-                    .foregroundStyle(tint)
+                    .foregroundStyle(tint ?? Color.secondary)
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
+                Spacer(minLength: 0)
             }
             Text(value)
                 .font(.title3.weight(.bold))
-                .foregroundStyle(tint)
+                .monospacedDigit()
+                .foregroundStyle(tint ?? Color.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.62)
+            if let change {
+                MonthChangeLabel(metric: change)
+            } else if let caption {
+                Text(caption)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
         .padding(12)
-        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous))
+        .background(tint.map { $0.opacity(0.18) } ?? Color(uiColor: .tertiarySystemFill), in: shape)
         .overlay {
-            RoundedRectangle(cornerRadius: AppLayout.insetCornerRadius, style: .continuous)
-                .stroke(tint.opacity(0.08), lineWidth: 0.6)
+            if let tint {
+                shape.stroke(tint.opacity(0.22), lineWidth: 0.6)
+            }
         }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -1729,6 +1748,8 @@ struct MonthSelector: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: AppLayout.monthSelectorMinimumHeight)
+        .fixedSize(horizontal: false, vertical: true)
         .background(Color(uiColor: .systemBackground).opacity(0.72), in: Capsule())
         .overlay {
             Capsule()

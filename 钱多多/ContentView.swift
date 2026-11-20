@@ -11,7 +11,14 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
+    @State private var presentedAssistant: AIAssistantSession?
+    @State private var assistantSession: AIAssistantSession?
     @ObservedObject private var reminders = VideoCommentNotificationManager.shared
+
+    private var currentPageName: String {
+        let names = ["汇总", "池子", "视频", "账本", "待办"]
+        return names.indices.contains(selectedTab) ? names[selectedTab] : "汇总"
+    }
 
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -43,10 +50,38 @@ struct ContentView: View {
                 }
                 .tag(3)
 
+            TodoPage()
+                .tabItem {
+                    Label("待办", systemImage: "checklist")
+                }
+                .tag(4)
+
         }
         .environment(\.locale, Locale(identifier: "zh_CN"))
+        .onReceive(NotificationCenter.default.publisher(for: .aiAssistantNavigate)) { note in
+            guard let tab = note.userInfo?["tab"] as? Int else { return }
+            selectedTab = tab
+            presentedAssistant = nil
+        }
         .environment(\.appThemeColor, AppThemeSettings.shared.color)
         .tint(AppTheme.readablePrimary)
+        .overlay(alignment: .bottomLeading) {
+            AIAssistantFloatingCat {
+                if let assistantSession {
+                    assistantSession.pageName = currentPageName
+                } else {
+                    assistantSession = AIAssistantSession(context: viewContext, pageName: currentPageName)
+                }
+                presentedAssistant = assistantSession
+            }
+                .ignoresSafeArea(.keyboard)
+        }
+        .fullScreenCover(item: $presentedAssistant) { session in
+            AIAssistantView(session: session)
+                .environment(\.managedObjectContext, viewContext)
+                .tint(AppTheme.readablePrimary)
+                .presentationBackground(.clear)
+        }
         .sheet(isPresented: Binding(
             get: { reminders.openedReminder != nil },
             set: { isPresented in
@@ -68,15 +103,38 @@ struct ContentView: View {
             reminders.configure(container: PersistenceController.shared.container)
         }
         .task {
+            TodoWidgetBridge.shared.configure(persistence: .shared)
             await reminders.publicationDidSave()
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
+                TodoWidgetBridge.shared.requestRefresh()
                 PersistenceController.shared.repairOwnedShareMembership()
                 Task { await reminders.publicationDidSave() }
+            } else if newPhase == .background {
+                Task { try? await TodoWidgetBridge.shared.refreshNow() }
             }
         }
-        .onOpenURL { reminders.open($0) }
+        .onChange(of: AppThemeSettings.shared.color) { _, _ in
+            TodoWidgetBridge.shared.requestRefresh()
+        }
+        .onOpenURL { url in
+            if url.scheme == "qianduoduo", url.host == "assistant-share" {
+                let images = AIShareInbox.takeImages()
+                guard !images.isEmpty else { return }
+                let session = assistantSession ?? AIAssistantSession(context: viewContext, pageName: currentPageName)
+                assistantSession = session
+                session.pageName = currentPageName
+                presentedAssistant = session
+                Task { await session.send("我从相册分享了截图，请识别并处理。", images: images, displayText: "分享的截图") }
+                return
+            }
+            if url.scheme == "qianduoduo", url.host == "todo" {
+                reminders.openedReminder = nil
+                selectedTab = 4
+            }
+            else { reminders.open(url) }
+        }
         .onChange(of: reminders.openedReminder?.id) { _, id in
             guard id != nil else { return }
             selectedTab = 2

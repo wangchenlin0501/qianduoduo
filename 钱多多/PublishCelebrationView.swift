@@ -62,7 +62,7 @@ private final class PublishCelebrationEffects {
     func play() {
         successFeedback.prepare()
         impactFeedback.prepare()
-        PublishCelebrationAudio.shared.playCelebration()
+        Task { await PublishCelebrationAudio.shared.playCelebration() }
 
         successFeedback.notificationOccurred(.success)
         Task { @MainActor in

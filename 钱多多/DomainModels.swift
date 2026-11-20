@@ -24,9 +24,9 @@ enum PaymentStatus: String, CaseIterable, Identifiable {
     var tint: Color {
         switch self {
         case .unpaid:
-            .red
+            AppTheme.danger
         case .paid:
-            .green
+            AppTheme.success
         }
     }
 
@@ -124,7 +124,7 @@ enum AdWorkflow: String, CaseIterable, Identifiable {
         case .published:
             AppTheme.primary
         case .paid:
-            .green
+            AppTheme.success
         }
     }
 

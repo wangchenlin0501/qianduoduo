@@ -14,6 +14,9 @@
 - **池子**：维护品牌合作、联系人、产品、金额和拍摄安排。
 - **视频**：组织一期视频中的合作内容，通过日历安排拍摄，跟进发布状态。
 - **账本**：记录待回款与已回款，管理收款时间和备注。
+- **待办**：待办列表与桌面小组件，可链接到池子里的合作记录，随数据空间同步。
+- **AI 助手**：右侧贴边的小猫打开对话，可用自然语言查询和修改记录、排视频、新建待办、整理未回款并生成催款话术，也能识别合作截图。需要你自己填写兼容 OpenAI 接口的服务地址、模型名和 API Key；Key 存在本机钥匙串，并以明文随数据空间同步给共享空间的成员（不进入备份导出）。发布满 100 天仍未回款的记录视为放弃，默认不统计也不催款。助手有可编辑的共用记忆。
+- **分享扩展**：在照片里选中截图，分享到“钱多多”，App 打开后图片自动交给 AI 助手处理（最多 4 张）。
 - **协作**：使用 Core Data + CloudKit 在授权的设备和协作者之间共享数据。
 - **提醒**：本地评论提醒、声音和实时活动，发布后显示庆祝动画；庆祝音效支持本机自定义录音。
 - **数据管理**：包含截图的 JSON 备份、按记录 ID 去重导入，以及临时隐藏数据的展示模式。
@@ -26,15 +29,15 @@
 - macOS + Xcode 27（此次编译验证版本）。
 - iOS / iPadOS 18.6 或更高版本。
 - 真机安装需要配置自己的 Apple 开发者签名；CloudKit 共享需要相应的开发者账号与容器能力。
-- 不依赖第三方 Swift Package、后端服务器或 API 密钥。
+- 不依赖第三方 Swift Package 和后端服务器。AI 助手是可选功能，只有填写自己的 API Key 后才会联网。
 
-当前版本处于 App Store 上架准备阶段，尚未在 App Store 发布。这里提供源码，不包含可直接安装的 App Store / TestFlight 版本。
+当前版本（2.2）处于 TestFlight 测试阶段，尚未在 App Store 发布。这里提供源码，不包含可直接安装的 App Store / TestFlight 版本。
 
 ## 配置与启动
 
 1. 克隆仓库，打开 `钱多多.xcodeproj`。
 2. 将 `Config/Signing.local.xcconfig.example` 复制成 `Config/Signing.local.xcconfig`，填写自己的 Team ID、唯一的 Bundle ID 和 CloudKit 容器 ID。这个本地文件已经被 Git 忽略，不要提交。
-3. 在 Apple 开发者账号和 Xcode 的 Signing & Capabilities 中配置主应用的 iCloud / CloudKit、Push Notifications 和 Time Sensitive Notifications，创建匹配的 CloudKit 容器；评论提醒扩展也需要签名。
+3. 在 Apple 开发者账号和 Xcode 的 Signing & Capabilities 中配置主应用的 iCloud / CloudKit、Push Notifications 和 Time Sensitive Notifications，创建匹配的 CloudKit 容器；评论提醒扩展和分享扩展也需要签名。主应用、小组件和分享扩展共用 App Group `group.<你的 Bundle ID>`，需要在开发者后台创建并勾选。
 4. 顶部 Scheme 选择 **钱多多**，选择自己的 iPhone 后运行。`CommentReminderWidget` 只有实时活动，日常不要直接运行该扩展。
 5. 首次共享前先用自己的容器验证数据保存与邀请。分发 Release 版本时还需在 CloudKit Console 检查并部署对应的生产 schema。
 
@@ -69,6 +72,7 @@ xcrun swiftc 钱多多/MonthlyAmountTrend.swift scripts/verify-monthly-amount.sw
 - 用户录入的信息保存在设备的 Core Data 数据库，并通过配置的 CloudKit 私有／共享数据库同步。共享邀请请只发送给你信任的人。
 - 导出文件会包含账单、联系人和其他业务字段；不要把真实导出、运行日志或带私人内容的截图上传到公开 Issue。
 - 设置里的展示模式只是隐藏页面数据，不是删除数据，也不是脱敏导出。
+- 使用 AI 助手时，你的提问、所选记录内容和发送的截图会发给你配置的 AI 服务，请自行确认对方的数据政策；不使用时不会发送任何内容。
 - 自定义庆祝录音只保存在本机，不进入协作共享、JSON 导出或设备备份。麦克风权限仅在用户主动录制时请求。
 - 当前代码会清理超过三个月的合作截图，记录字段仍然保留；重要图片请自行备份。
 - 这是从日常使用中整理出的个人项目，功能仍在完善。重要账单请做好备份，软件不能代替专业财务核算。
